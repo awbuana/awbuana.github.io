@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="en" dir="auto" data-theme="auto">
 
-<head><script src="/livereload.js?mindelay=10&amp;v=2&amp;port=1313&amp;path=livereload" data-no-instant defer></script><meta charset="utf-8">
+<head><meta charset="utf-8">
 <meta http-equiv="X-UA-Compatible" content="IE=edge">
 <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
 <meta name="robots" content="index, follow">
@@ -9,16 +9,16 @@
 <meta name="keywords" content="kubernetes, devops, performance, gke, cost-optimization">
 <meta name="description" content="Most developers set Kubernetes resource requests wrong. Here&#39;s what I learned about CPU throttling, bin packing, and why your optimized GKE cluster might be the problem.">
 <meta name="author" content="Agni Wira Buana">
-<link rel="canonical" href="http://localhost:1313/posts/kubernetes-resource-optimization/">
+<link rel="canonical" href="https://awbuana.github.io/posts/kubernetes-resource-optimization/">
 <link crossorigin="anonymous" href="/assets/css/stylesheet.da3211e5ef867bf2b75fd5a6515cfed7195c011e8ab735694e203810a827097b.css" integrity="sha256-2jIR5e&#43;Ge/K3X9WmUVz&#43;1xlcAR6KtzVpTiA4EKgnCXs=" rel="preload stylesheet" as="style">
-<link rel="icon" href="http://localhost:1313/favicon.ico">
-<link rel="icon" type="image/png" sizes="16x16" href="http://localhost:1313/favicon-16x16.png">
-<link rel="icon" type="image/png" sizes="32x32" href="http://localhost:1313/favicon-32x32.png">
-<link rel="apple-touch-icon" href="http://localhost:1313/apple-touch-icon.png">
-<link rel="mask-icon" href="http://localhost:1313/safari-pinned-tab.svg">
+<link rel="icon" href="https://awbuana.github.io/favicon.ico">
+<link rel="icon" type="image/png" sizes="16x16" href="https://awbuana.github.io/favicon-16x16.png">
+<link rel="icon" type="image/png" sizes="32x32" href="https://awbuana.github.io/favicon-32x32.png">
+<link rel="apple-touch-icon" href="https://awbuana.github.io/apple-touch-icon.png">
+<link rel="mask-icon" href="https://awbuana.github.io/safari-pinned-tab.svg">
 <meta name="theme-color" content="#2e2e33">
 <meta name="msapplication-TileColor" content="#2e2e33">
-<link rel="alternate" hreflang="en" href="http://localhost:1313/posts/kubernetes-resource-optimization/">
+<link rel="alternate" hreflang="en" href="https://awbuana.github.io/posts/kubernetes-resource-optimization/">
 <noscript>
     <style>
         #theme-toggle,
@@ -70,12 +70,12 @@
         document.querySelector("html").dataset.theme = 'light';
     }
 
-</script><link rel="canonical" href="http://localhost:1313/posts/kubernetes-resource-optimization/">
+</script><link rel="canonical" href="https://awbuana.github.io/posts/kubernetes-resource-optimization/">
 <meta property="og:locale" content="en_US">
 <meta property="og:type" content="article">
 <meta property="og:title" content="The Resource Request You Think Is Saving Money Is Actually Breaking Your App - awbuana">
 <meta property="og:description" content="Most developers set Kubernetes resource requests wrong. Here&#39;s what I learned about CPU throttling, bin packing, and why your optimized GKE cluster might be the problem.">
-<meta property="og:url" content="http://localhost:1313/posts/kubernetes-resource-optimization/">
+<meta property="og:url" content="https://awbuana.github.io/posts/kubernetes-resource-optimization/">
 <meta property="og:site_name" content="awbuana">
 
 <meta property="article:published_time" content="2026-03-19T00:00:00Z">
@@ -554,7 +554,7 @@
       font-size: 1.25rem;
     }
   }
-</style><meta property="og:url" content="http://localhost:1313/posts/kubernetes-resource-optimization/">
+</style><meta property="og:url" content="https://awbuana.github.io/posts/kubernetes-resource-optimization/">
   <meta property="og:site_name" content="awbuana">
   <meta property="og:title" content="The Resource Request You Think Is Saving Money Is Actually Breaking Your App">
   <meta property="og:description" content="Most developers set Kubernetes resource requests wrong. Here&#39;s what I learned about CPU throttling, bin packing, and why your optimized GKE cluster might be the problem.">
@@ -568,10 +568,10 @@
     <meta property="article:tag" content="Performance">
     <meta property="article:tag" content="Gke">
     <meta property="article:tag" content="Cost-Optimization">
-      <meta property="og:image" content="http://localhost:1313/images/profile.jpg">
+      <meta property="og:image" content="https://awbuana.github.io/images/profile.jpg">
 
   <meta name="twitter:card" content="summary_large_image">
-  <meta name="twitter:image" content="http://localhost:1313/images/profile.jpg">
+  <meta name="twitter:image" content="https://awbuana.github.io/images/profile.jpg">
   <meta name="twitter:title" content="The Resource Request You Think Is Saving Money Is Actually Breaking Your App">
   <meta name="twitter:description" content="Most developers set Kubernetes resource requests wrong. Here&#39;s what I learned about CPU throttling, bin packing, and why your optimized GKE cluster might be the problem.">
 
@@ -585,13 +585,13 @@
       "@type": "ListItem",
       "position":  1 ,
       "name": "Posts",
-      "item": "http://localhost:1313/posts/"
+      "item": "https://awbuana.github.io/posts/"
     }, 
     {
       "@type": "ListItem",
       "position":  2 ,
       "name": "The Resource Request You Think Is Saving Money Is Actually Breaking Your App",
-      "item": "http://localhost:1313/posts/kubernetes-resource-optimization/"
+      "item": "https://awbuana.github.io/posts/kubernetes-resource-optimization/"
     }
   ]
 }
@@ -609,7 +609,7 @@
   "articleBody": "I thought I was being clever.\nWhen we migrated our services to Google Kubernetes Engine with auto scale profile optimized, I looked at our resource specs and saw an opportunity. Our pods were requesting 100m CPU but had limits set to 1000m. Ten times headroom! Surely we could tighten that up and save some money.\nSo I did what seemed logical: I kept the limits high (just in case of traffic spikes) but dropped the requests even lower. 50m here, 25m there. The cluster was happy. Our costs went down. I patted myself on the back for being such a savvy engineer.\nThen the Kafka consumers stopped consuming.\nNot all of them. Just… some of them. Randomly. One consumer would process thousands of messages per second, another would hang for minutes at a time. No errors in the logs. No memory pressure. The pods were “healthy” according to Kubernetes. But they weren’t working.\nThe Difference Between Request and Limit (That I Didn’t Understand) Here’s what I thought I knew about Kubernetes resource management:\nRequest: What the container needs to run Limit: What the container is allowed to use Seems straightforward, right? Set requests low to pack more pods onto fewer nodes. Set limits high so pods can burst during traffic spikes. This is what “optimized” looks like.\nWhat I didn’t understand was how GKE auto scale profile optimized (and any node auto-provisioning system) actually uses these values.\nWhen you set a CPU request of 50m (that’s 0.05 CPU cores, by the way), GKE looks at that number and says “I need to provision a node that can guarantee this pod 50m of CPU.” It doesn’t look at your limit. At all. Your 1000m limit might as well not exist when GKE is deciding how big your nodes should be.\nSo you end up with nodes that are sized for your requests, not your actual usage. And here’s where it gets painful.\nCPU Throttling: The Silent Killer When your pod tries to use more CPU than its request, Kubernetes doesn’t stop it immediately. That would be too obvious. Instead, it uses something called CFS (Completely Fair Scheduler) quotas to throttle the container’s CPU usage.\nThe math works like this: if you request 50m CPU, your container gets allocated 50ms of CPU time every 100ms period. Use it or lose it. If your container needs more than that 50ms in a given period, it gets throttled. It has to wait for the next period.\nTo the application, this feels like… random latency. Sometimes fast, sometimes slow. Sometimes your Kafka consumer processes a batch in 50ms, sometimes it takes 500ms. Sometimes your API responds in 10ms, sometimes in 200ms.\nWe spent weeks chasing this. We thought it was a network issue. Then a Kafka configuration problem. Then maybe GC pressure from our Go services (we’re a Go shop). We added metrics, traces, alerts. Everything looked fine except… the application just wasn’t performing consistently.\nThen I stumbled on a GitHub issue about CPU throttling. Someone mentioned running kubectl top pod and comparing the CPU usage to the request. I ran it on our problematic service:\nNAME CPU(cores) MEMORY(bytes) consumer-7d9f4b8c5-x2v9 48m 512Mi 48m actual usage. 50m request. We were living right at the edge, and any slight burst would trigger throttling. The “high” limit of 1000m was a fantasy. The node didn’t have that CPU to give.\nBin Packing: The Optimization Trap Here’s the thing that really stung: this was all working “as designed.”\nGKE with auto scale profile optimized is doing exactly what we asked it to do. We told it we only needed 50m CPU, so it packed 40 of our pods onto a single 2-core node. That’s efficient! That’s cost-effective! That’s exactly what we said we wanted!\nThe problem is that “bin packing efficiency” and “application performance” are often in direct conflict. The more densely you pack pods onto nodes, the more likely you are to hit resource constraints.\nI think of it like airplane seats. You can fit more people on the plane by removing legroom. The plane is technically more efficient. But nobody’s comfortable, and the experience degrades for everyone.\nBut there’s an even bigger risk we didn’t consider: the “all eggs in one basket” problem. When you pack 40 pods onto a single node, you’re centralizing your entire deployment. If that node goes down—hardware failure, maintenance, whatever—you’re not losing one pod. You’re losing 40. It’s the classic operational risk of concentrating too much in one place.\nThe real kicker? We weren’t actually saving money. Yes, our GKE bill was lower. But we were paying for it in:\nEngineering time spent debugging performance issues Slower message processing (which meant larger Kafka backlogs) Customer complaints about intermittent latency The cognitive load of “why is this slow sometimes?” Higher operational risk from over-centralized workloads What CPU Throttling Actually Looks Like Let me give you some specific symptoms we saw, because I wish someone had handed me this list six months ago:\nKafka consumers that randomly stop keeping up with producers. Your lag grows, then shrinks, then grows again. No pattern you can correlate to traffic. The consumer group is “healthy” but just… slow.\nAPI endpoints with bimodal latency distributions. 90% of requests take 20ms, 10% take 200ms+. Same endpoint, same payload, same time of day. The slow ones aren’t errors—they’re just throttled.\nApplications that hang during startup. Your pod passes the readiness probe eventually, but it takes 3 minutes instead of 30 seconds because the initialization code keeps getting throttled.\nMetrics that look fine. CPU usage is well under the limit. Memory is stable. No restarts. No OOMKills. But the application is clearly struggling.\nThe pattern to look for: inconsistent performance without obvious resource exhaustion.\nHow to Actually Set Resource Requests So what should you do instead?\nFirst, stop treating requests as “what I hope the container uses” and start treating them as “what the container actually needs during normal operation.” This requires measuring, not guessing.\nHere’s the workflow I use now:\nStep 1: Measure actual usage\nRun your service under realistic load and watch the CPU usage patterns. Don’t just look at averages—look at P95 and P99. You want to understand what “busy” looks like, not just what “typical” looks like.\n1 2 3 4 # Watch CPU usage in real-time kubectl top pod -l app=my-service --containers # Or get historical data from Prometheus/metrics-server Step 2: Add headroom for bursts\nOnce you know your P95 usage, add 20-30% headroom. If your service typically uses 200m but bursts to 300m during traffic spikes, request 350m. Not 50m.\nThe goal isn’t to maximize node packing. The goal is to ensure your application has the resources it needs to perform consistently.\nStep 3: Set limits closer to requests (usually)\nHere’s a hot take: your limits should probably be close to your requests. Like, within 50% of each other.\nI know, I know. “But what about traffic spikes?” If you get traffic spikes, you should be scaling horizontally (more pods), not vertically (more CPU per pod). Horizontal scaling is what Kubernetes is good at. Relying on vertical bursting is a recipe for inconsistent performance.\nThe exception: batch jobs or background workers that genuinely have variable resource needs. But for stateless web services? Keep them close.\nStep 3b: Right-size your containers (critical for bin packing)\nHere’s something that took me too long to learn: effective bin packing depends entirely on right-sizing. If your containers are too large—say, requesting 75% of a node’s capacity—you won’t be able to fit additional containers onto the node regardless of how clever your packing strategy is. You’ll essentially force waste.\nThe resources you allocate to a container and the resources a machine offers are critical factors. Before you optimize your bin packing, make sure your container sizes make sense for your node sizes. Otherwise you’re optimizing the wrong thing.\nStep 4: Monitor throttling explicitly\nAdd this metric to your dashboards:\n1 2 rate(container_cpu_cfs_throttled_periods_total[5m]) / rate(container_cpu_cfs_periods_total[5m]) This gives you the percentage of CPU periods that were throttled. If it’s consistently above 0, you’re under-provisioned.\nThe GKE Auto Scale Profile Optimized Gotcha If you’re using GKE with auto scale profile optimized, there’s one more thing to understand: the node provisioning is based entirely on your requests, not your actual usage or your limits.\nThis means that setting low requests and high limits doesn’t give you “room to burst.” It gives you “nodes that are too small for your actual needs, plus a false sense of security.”\nWhen we fixed our resource specs—bumping requests from 50m to 300m for most services—GKE provisioned larger nodes. Our costs went up. But our performance issues disappeared overnight. The Kafka lag graphs went from erratic sawtooth patterns to clean flatlines. Our API latency became predictable.\nWas it worth the extra money? Absolutely. We spent more on infrastructure and less on engineering time chasing ghosts.\nMemory: The Non-Compressible Resource One more thing worth mentioning: CPU is compressible—you can throttle it without crashing your application. Memory is not.\nWith CPU, if you hit the limit, your process just slows down. With memory, if you hit the limit, your process gets OOMKilled. Period. This is why you should always set hard limits for memory, and why memory allocation deserves more careful consideration than CPU.\nIn our case, we got lucky—our memory requests were actually reasonable. But I’ve seen teams apply the same “low request, high limit” strategy to memory and watch their pods get evicted constantly. Don’t do that. Set memory requests and limits close together, and base them on actual measured needs, not wishful thinking.\nA Framework for Resource Decisions Here’s the mental model I use now when setting resource specs:\nRequest = Guarantee: This is what Kubernetes promises your container. It’s also what bin-packing algorithms use to schedule your pods. Set it based on actual measured needs, not wishful thinking.\nLimit = Safety Net: This is what prevents a runaway process from taking down the node. It’s not a performance target. Don’t set it 10x higher than your request unless you truly understand what you’re doing.\nMeasured Usage = Truth: Your application uses what it uses. You can’t negotiate with CPU requirements. Either give it enough resources, or accept the throttling consequences.\nCost vs. Performance = Trade-off: There is no free lunch. You can optimize for cost (low requests, dense packing) or you can optimize for performance (higher requests, more headroom). You can’t optimize for both simultaneously.\nFurther reading:\nGKE features to optimize resource allocation - Google’s official documentation on auto scale profile optimized Optimizing Resource Utilization: the Benefits and Challenges of Bin Packing in Kubernetes - Excellent deep dive on balancing density vs. isolation Kubernetes CPU limits and CFS quotas GKE Autopilot resource management Understanding CPU throttling in Kubernetes ",
   "wordCount" : "1791",
   "inLanguage": "en",
-  "image": "http://localhost:1313/images/profile.jpg","datePublished": "2026-03-19T00:00:00Z",
+  "image": "https://awbuana.github.io/images/profile.jpg","datePublished": "2026-03-19T00:00:00Z",
   "dateModified": "2026-03-19T00:00:00Z",
   "author":{
     "@type": "Person",
@@ -617,14 +617,14 @@
   },
   "mainEntityOfPage": {
     "@type": "WebPage",
-    "@id": "http://localhost:1313/posts/kubernetes-resource-optimization/"
+    "@id": "https://awbuana.github.io/posts/kubernetes-resource-optimization/"
   },
   "publisher": {
     "@type": "Organization",
     "name": "awbuana",
     "logo": {
       "@type": "ImageObject",
-      "url": "http://localhost:1313/favicon.ico"
+      "url": "https://awbuana.github.io/favicon.ico"
     }
   }
 }
@@ -634,7 +634,7 @@
     <header class="header">
     <nav class="nav">
         <div class="logo">
-            <a href="http://localhost:1313/" accesskey="h" title="awbuana (Alt + H)">awbuana</a>
+            <a href="https://awbuana.github.io/" accesskey="h" title="awbuana (Alt + H)">awbuana</a>
             <div class="logo-switches">
                 <button id="theme-toggle" accesskey="t" title="(Alt + T)" aria-label="Toggle theme">
                     <svg id="moon" xmlns="http://www.w3.org/2000/svg" width="24" height="18" viewBox="0 0 24 24"
@@ -660,22 +660,22 @@
         </div>
         <ul id="menu">
             <li>
-                <a href="http://localhost:1313/posts/" title="Posts">
+                <a href="https://awbuana.github.io/posts/" title="Posts">
                     <span>Posts</span>
                 </a>
             </li>
             <li>
-                <a href="http://localhost:1313/tags/" title="Tags">
+                <a href="https://awbuana.github.io/tags/" title="Tags">
                     <span>Tags</span>
                 </a>
             </li>
             <li>
-                <a href="http://localhost:1313/about/" title="About">
+                <a href="https://awbuana.github.io/about/" title="About">
                     <span>About</span>
                 </a>
             </li>
             <li>
-                <a href="http://localhost:1313/archive/" title="Archive">
+                <a href="https://awbuana.github.io/archive/" title="Archive">
                     <span>Archive</span>
                 </a>
             </li>
@@ -825,18 +825,18 @@ consumer-7d9f4b8c5-x2v9   48m          512Mi
 
   <footer class="post-footer">
     <ul class="post-tags">
-      <li><a href="http://localhost:1313/tags/kubernetes/">Kubernetes</a></li>
-      <li><a href="http://localhost:1313/tags/devops/">Devops</a></li>
-      <li><a href="http://localhost:1313/tags/performance/">Performance</a></li>
-      <li><a href="http://localhost:1313/tags/gke/">Gke</a></li>
-      <li><a href="http://localhost:1313/tags/cost-optimization/">Cost-Optimization</a></li>
+      <li><a href="https://awbuana.github.io/tags/kubernetes/">Kubernetes</a></li>
+      <li><a href="https://awbuana.github.io/tags/devops/">Devops</a></li>
+      <li><a href="https://awbuana.github.io/tags/performance/">Performance</a></li>
+      <li><a href="https://awbuana.github.io/tags/gke/">Gke</a></li>
+      <li><a href="https://awbuana.github.io/tags/cost-optimization/">Cost-Optimization</a></li>
     </ul>
   </footer>
 </article>
     </main>
     
 <footer class="footer">
-        <span>&copy; 2026 <a href="http://localhost:1313/">awbuana</a></span> · 
+        <span>&copy; 2026 <a href="https://awbuana.github.io/">awbuana</a></span> · 
 
     <span>
         Powered by

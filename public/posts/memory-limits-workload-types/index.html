@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="en" dir="auto" data-theme="auto">
 
-<head><script src="/livereload.js?mindelay=10&amp;v=2&amp;port=1313&amp;path=livereload" data-no-instant defer></script><meta charset="utf-8">
+<head><meta charset="utf-8">
 <meta http-equiv="X-UA-Compatible" content="IE=edge">
 <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
 <meta name="robots" content="index, follow">
@@ -9,16 +9,16 @@
 <meta name="keywords" content="kubernetes, devops, architecture, stateful-apps, reliability">
 <meta name="description" content="I said memory limits are about survival. But what does &#39;survival&#39; actually mean for stateless vs stateful workloads? The answer surprised me.">
 <meta name="author" content="Agni Wira Buana">
-<link rel="canonical" href="http://localhost:1313/posts/memory-limits-workload-types/">
+<link rel="canonical" href="https://awbuana.github.io/posts/memory-limits-workload-types/">
 <link crossorigin="anonymous" href="/assets/css/stylesheet.da3211e5ef867bf2b75fd5a6515cfed7195c011e8ab735694e203810a827097b.css" integrity="sha256-2jIR5e&#43;Ge/K3X9WmUVz&#43;1xlcAR6KtzVpTiA4EKgnCXs=" rel="preload stylesheet" as="style">
-<link rel="icon" href="http://localhost:1313/favicon.ico">
-<link rel="icon" type="image/png" sizes="16x16" href="http://localhost:1313/favicon-16x16.png">
-<link rel="icon" type="image/png" sizes="32x32" href="http://localhost:1313/favicon-32x32.png">
-<link rel="apple-touch-icon" href="http://localhost:1313/apple-touch-icon.png">
-<link rel="mask-icon" href="http://localhost:1313/safari-pinned-tab.svg">
+<link rel="icon" href="https://awbuana.github.io/favicon.ico">
+<link rel="icon" type="image/png" sizes="16x16" href="https://awbuana.github.io/favicon-16x16.png">
+<link rel="icon" type="image/png" sizes="32x32" href="https://awbuana.github.io/favicon-32x32.png">
+<link rel="apple-touch-icon" href="https://awbuana.github.io/apple-touch-icon.png">
+<link rel="mask-icon" href="https://awbuana.github.io/safari-pinned-tab.svg">
 <meta name="theme-color" content="#2e2e33">
 <meta name="msapplication-TileColor" content="#2e2e33">
-<link rel="alternate" hreflang="en" href="http://localhost:1313/posts/memory-limits-workload-types/">
+<link rel="alternate" hreflang="en" href="https://awbuana.github.io/posts/memory-limits-workload-types/">
 <noscript>
     <style>
         #theme-toggle,
@@ -70,12 +70,12 @@
         document.querySelector("html").dataset.theme = 'light';
     }
 
-</script><link rel="canonical" href="http://localhost:1313/posts/memory-limits-workload-types/">
+</script><link rel="canonical" href="https://awbuana.github.io/posts/memory-limits-workload-types/">
 <meta property="og:locale" content="en_US">
 <meta property="og:type" content="article">
 <meta property="og:title" content="CPU Limits vs Memory Limits: When &#39;Survival&#39; Means Different Things - awbuana">
 <meta property="og:description" content="I said memory limits are about survival. But what does &#39;survival&#39; actually mean for stateless vs stateful workloads? The answer surprised me.">
-<meta property="og:url" content="http://localhost:1313/posts/memory-limits-workload-types/">
+<meta property="og:url" content="https://awbuana.github.io/posts/memory-limits-workload-types/">
 <meta property="og:site_name" content="awbuana">
 
 <meta property="article:published_time" content="2026-03-19T00:00:00Z">
@@ -554,7 +554,7 @@
       font-size: 1.25rem;
     }
   }
-</style><meta property="og:url" content="http://localhost:1313/posts/memory-limits-workload-types/">
+</style><meta property="og:url" content="https://awbuana.github.io/posts/memory-limits-workload-types/">
   <meta property="og:site_name" content="awbuana">
   <meta property="og:title" content="CPU Limits vs Memory Limits: When &#39;Survival&#39; Means Different Things">
   <meta property="og:description" content="I said memory limits are about survival. But what does &#39;survival&#39; actually mean for stateless vs stateful workloads? The answer surprised me.">
@@ -568,10 +568,10 @@
     <meta property="article:tag" content="Architecture">
     <meta property="article:tag" content="Stateful-Apps">
     <meta property="article:tag" content="Reliability">
-      <meta property="og:image" content="http://localhost:1313/images/profile.jpg">
+      <meta property="og:image" content="https://awbuana.github.io/images/profile.jpg">
 
   <meta name="twitter:card" content="summary_large_image">
-  <meta name="twitter:image" content="http://localhost:1313/images/profile.jpg">
+  <meta name="twitter:image" content="https://awbuana.github.io/images/profile.jpg">
   <meta name="twitter:title" content="CPU Limits vs Memory Limits: When &#39;Survival&#39; Means Different Things">
   <meta name="twitter:description" content="I said memory limits are about survival. But what does &#39;survival&#39; actually mean for stateless vs stateful workloads? The answer surprised me.">
 
@@ -585,13 +585,13 @@
       "@type": "ListItem",
       "position":  1 ,
       "name": "Posts",
-      "item": "http://localhost:1313/posts/"
+      "item": "https://awbuana.github.io/posts/"
     }, 
     {
       "@type": "ListItem",
       "position":  2 ,
       "name": "CPU Limits vs Memory Limits: When 'Survival' Means Different Things",
-      "item": "http://localhost:1313/posts/memory-limits-workload-types/"
+      "item": "https://awbuana.github.io/posts/memory-limits-workload-types/"
     }
   ]
 }
@@ -609,7 +609,7 @@
   "articleBody": "In my previous post, I said: “CPU limits are about performance. Memory limits are about survival.” I stand by that statement, but I oversimplified what “survival” actually means depending on what kind of application you’re running.\nLet me break this down.\nStateless Applications: The “Easy” Case When I wrote about memory limits being “about survival,” I was thinking primarily of stateless services. You know, the typical microservices: APIs, web servers, queue consumers.\nFor these apps, an OOMKill looks like this:\nRequest comes in Memory spikes (maybe a large payload, maybe a leak) OOM Killer terminates the pod Kubernetes restarts it Service continues The blast radius is limited. Yes, that one request failed. Yes, there’s a brief interruption. But the system recovers automatically. The “survival” here is about keeping the service available, not about protecting data.\nThis is what I had in mind when I wrote about memory limits. And honestly? This is the best-case scenario for an OOMKill.\nStateful Applications: Where It Gets Painful Here’s where I need to correct myself. For stateful applications, memory limits aren’t just about survival—they’re about preventing catastrophic data loss and expensive recovery operations.\nDatabases When your PostgreSQL or MongoDB pod gets OOMKilled:\nActive connections drop immediately In-flight transactions rollback (if you’re lucky and have proper transactions) Write-ahead logs might not be fully flushed Replication lag increases while the replica restarts Cache is cold after restart, causing performance degradation The pod restarts, sure. But now you’re potentially dealing with:\nData consistency issues Replication catch-up time Connection storms as clients retry Query performance degradation due to cold caches Message Queues (Kafka, RabbitMQ, NATS) This is where I learned my lesson the hard way.\nWhen a Kafka broker gets OOMKilled:\nIn-flight messages are lost if they weren’t replicated yet Consumer lag spikes while the broker restarts and recovers Partition rebalancing causes additional latency Replication stalls as followers catch up We had this happen in production. A broker with insufficient memory got killed during a traffic spike. The cluster survived (Kafka is designed for this), but:\nWe lost about 30 seconds of messages that hadn’t replicated Consumer lag went from 0 to 50,000 messages It took 20 minutes for the cluster to fully rebalance Our “exactly once” processing guarantee became “at least once” (duplicate processing) The pod survived. The data mostly survived. But our guarantees didn’t.\nCaches (Redis, Memcached) Redis getting OOMKilled is especially painful:\nAll in-memory data is gone (unless you have persistence enabled) Cache warming takes time and hits your database hard Session data lost if you’re using Redis for sessions Rate limiting counters reset if you’re using Redis for throttling I once saw a Redis instance with 40GB of cached data get OOMKilled. It took 3 hours to rebuild the cache from the database, during which our database CPU was pegged at 100%.\nDistributed Systems (etcd, ZooKeeper, Consul) These are the worst-case scenario.\nWhen an etcd member gets OOMKilled:\nQuorum might be lost if you lose enough members Leader election has to happen All Kubernetes API operations stall (if it’s your cluster etcd) Distributed locks get released unexpectedly I don’t have personal war stories here, thank god. But I’ve read the post-mortems. Losing etcd quorum is a “page everyone, wake up the VP” kind of incident.\nBatch Jobs: The Silent Killer I completely overlooked batch jobs in my original post.\nFor batch processing (ETL jobs, ML training, data migrations):\nOOMKill = job failure Job failure = wasted compute resources Wasted compute = money down the drain A batch job that runs for 6 hours and then gets OOMKilled in the final stage? That’s 6 hours of compute wasted. If it’s a $5/hour GPU instance, you just burned $30 and have to start over.\nThe “survival” here is about completing the work, not just keeping the process running.\nSidecars and DaemonSets: The Observability Trap Here’s one I didn’t consider: what happens when your monitoring or logging sidecar gets OOMKilled?\nYour main application keeps running. It looks healthy. But:\nLogs stop flowing to your aggregation system Metrics aren’t collected You have a blind spot I saw this happen with a Prometheus node-exporter. It got OOMKilled during a load spike. The application was “healthy” according to Kubernetes, but we had no metrics for 10 minutes. We didn’t know there was a problem until the customer called.\nSo What Does “Survival” Really Mean? Let me revise my earlier statement:\nFor stateless apps: Survival means keeping the service available and responsive.\nFor stateful apps: Survival means preventing data loss, maintaining consistency guarantees, and avoiding expensive recovery operations.\nFor batch jobs: Survival means completing the work without wasting compute resources.\nFor sidecars: Survival means maintaining observability and control plane functions.\nThe memory limit isn’t just protecting the process—it’s protecting your data, your guarantees, your compute budget, and your visibility.\nRethinking Resource Allocation by Workload Type Given this, here’s how I approach memory limits now:\nStateless Services 1 2 3 4 5 resources: requests: memory: \"512Mi\" limits: memory: \"512Mi\" # Match request for Guaranteed QoS Conservative but safe. I can scale horizontally if I need more capacity.\nDatabases 1 2 3 4 5 resources: requests: memory: \"8Gi\" limits: memory: \"10Gi\" # Some headroom, but not too much I leave a small gap (20-25%) for burst allocation, but I monitor closely. I want to know if we’re approaching the limit so I can scale vertically before an OOMKill happens.\nMessage Queues 1 2 3 4 5 resources: requests: memory: \"16Gi\" limits: memory: \"16Gi\" # Hard limit matching request No room for error. I’d rather provision too much memory than risk losing messages.\nBatch Jobs 1 2 3 4 5 resources: requests: memory: \"4Gi\" limits: memory: \"8Gi\" # Generous headroom Batch jobs often have spiky memory usage. I’d rather over-provision than restart a 6-hour job.\nSidecars (logging, monitoring) 1 2 3 4 5 resources: requests: memory: \"128Mi\" limits: memory: \"256Mi\" # Generous headroom for log bursts These need to survive traffic spikes in the main application. Don’t let your observability die when you need it most.\nThe Real Lesson What you’re surviving depends on what you’re running.\nFor a stateless API, survival means the service stays up. For a database, survival means your data stays consistent. For a batch job, survival means the work completes. For a sidecar, survival means you can still see what’s happening.\nThe cost of an OOMKill isn’t just the restart time. It’s:\nData loss (stateful apps) Consistency violations (distributed systems) Wasted compute (batch jobs) Blind spots (observability) Customer impact (everything) So yes, memory limits are about survival. But “survival” means different things for different workloads. Understanding your specific failure modes is what separates a working system from a reliable one. That’s the real difference between CPU and memory limits. CPU throttling gives you time to react. Memory limits give you… well, they give you a restart loop and a pager notification. Plan accordingly.\nFurther reading:\nQuality-of-Service for Memory Resources - Kubernetes blog on Memory QoS OOM Killer Deep Dive Redis Persistence Documentation Kafka Replication and ISR ",
   "wordCount" : "1167",
   "inLanguage": "en",
-  "image": "http://localhost:1313/images/profile.jpg","datePublished": "2026-03-19T00:00:00Z",
+  "image": "https://awbuana.github.io/images/profile.jpg","datePublished": "2026-03-19T00:00:00Z",
   "dateModified": "2026-03-19T00:00:00Z",
   "author":{
     "@type": "Person",
@@ -617,14 +617,14 @@
   },
   "mainEntityOfPage": {
     "@type": "WebPage",
-    "@id": "http://localhost:1313/posts/memory-limits-workload-types/"
+    "@id": "https://awbuana.github.io/posts/memory-limits-workload-types/"
   },
   "publisher": {
     "@type": "Organization",
     "name": "awbuana",
     "logo": {
       "@type": "ImageObject",
-      "url": "http://localhost:1313/favicon.ico"
+      "url": "https://awbuana.github.io/favicon.ico"
     }
   }
 }
@@ -634,7 +634,7 @@
     <header class="header">
     <nav class="nav">
         <div class="logo">
-            <a href="http://localhost:1313/" accesskey="h" title="awbuana (Alt + H)">awbuana</a>
+            <a href="https://awbuana.github.io/" accesskey="h" title="awbuana (Alt + H)">awbuana</a>
             <div class="logo-switches">
                 <button id="theme-toggle" accesskey="t" title="(Alt + T)" aria-label="Toggle theme">
                     <svg id="moon" xmlns="http://www.w3.org/2000/svg" width="24" height="18" viewBox="0 0 24 24"
@@ -660,22 +660,22 @@
         </div>
         <ul id="menu">
             <li>
-                <a href="http://localhost:1313/posts/" title="Posts">
+                <a href="https://awbuana.github.io/posts/" title="Posts">
                     <span>Posts</span>
                 </a>
             </li>
             <li>
-                <a href="http://localhost:1313/tags/" title="Tags">
+                <a href="https://awbuana.github.io/tags/" title="Tags">
                     <span>Tags</span>
                 </a>
             </li>
             <li>
-                <a href="http://localhost:1313/about/" title="About">
+                <a href="https://awbuana.github.io/about/" title="About">
                     <span>About</span>
                 </a>
             </li>
             <li>
-                <a href="http://localhost:1313/archive/" title="Archive">
+                <a href="https://awbuana.github.io/archive/" title="Archive">
                     <span>Archive</span>
                 </a>
             </li>
@@ -910,18 +910,18 @@ That&rsquo;s the real difference between CPU and memory limits. CPU throttling g
 
   <footer class="post-footer">
     <ul class="post-tags">
-      <li><a href="http://localhost:1313/tags/kubernetes/">Kubernetes</a></li>
-      <li><a href="http://localhost:1313/tags/devops/">Devops</a></li>
-      <li><a href="http://localhost:1313/tags/architecture/">Architecture</a></li>
-      <li><a href="http://localhost:1313/tags/stateful-apps/">Stateful-Apps</a></li>
-      <li><a href="http://localhost:1313/tags/reliability/">Reliability</a></li>
+      <li><a href="https://awbuana.github.io/tags/kubernetes/">Kubernetes</a></li>
+      <li><a href="https://awbuana.github.io/tags/devops/">Devops</a></li>
+      <li><a href="https://awbuana.github.io/tags/architecture/">Architecture</a></li>
+      <li><a href="https://awbuana.github.io/tags/stateful-apps/">Stateful-Apps</a></li>
+      <li><a href="https://awbuana.github.io/tags/reliability/">Reliability</a></li>
     </ul>
   </footer>
 </article>
     </main>
     
 <footer class="footer">
-        <span>&copy; 2026 <a href="http://localhost:1313/">awbuana</a></span> · 
+        <span>&copy; 2026 <a href="https://awbuana.github.io/">awbuana</a></span> · 
 
     <span>
         Powered by

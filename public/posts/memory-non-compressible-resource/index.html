@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="en" dir="auto" data-theme="auto">
 
-<head><script src="/livereload.js?mindelay=10&amp;v=2&amp;port=1313&amp;path=livereload" data-no-instant defer></script><meta charset="utf-8">
+<head><meta charset="utf-8">
 <meta http-equiv="X-UA-Compatible" content="IE=edge">
 <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
 <meta name="robots" content="index, follow">
@@ -9,16 +9,16 @@
 <meta name="keywords" content="kubernetes, devops, memory, performance, troubleshooting">
 <meta name="description" content="CPU throttles. Memory kills. Understanding this fundamental difference will save you from 3 AM pages.">
 <meta name="author" content="Agni Wira Buana">
-<link rel="canonical" href="http://localhost:1313/posts/memory-non-compressible-resource/">
+<link rel="canonical" href="https://awbuana.github.io/posts/memory-non-compressible-resource/">
 <link crossorigin="anonymous" href="/assets/css/stylesheet.da3211e5ef867bf2b75fd5a6515cfed7195c011e8ab735694e203810a827097b.css" integrity="sha256-2jIR5e&#43;Ge/K3X9WmUVz&#43;1xlcAR6KtzVpTiA4EKgnCXs=" rel="preload stylesheet" as="style">
-<link rel="icon" href="http://localhost:1313/favicon.ico">
-<link rel="icon" type="image/png" sizes="16x16" href="http://localhost:1313/favicon-16x16.png">
-<link rel="icon" type="image/png" sizes="32x32" href="http://localhost:1313/favicon-32x32.png">
-<link rel="apple-touch-icon" href="http://localhost:1313/apple-touch-icon.png">
-<link rel="mask-icon" href="http://localhost:1313/safari-pinned-tab.svg">
+<link rel="icon" href="https://awbuana.github.io/favicon.ico">
+<link rel="icon" type="image/png" sizes="16x16" href="https://awbuana.github.io/favicon-16x16.png">
+<link rel="icon" type="image/png" sizes="32x32" href="https://awbuana.github.io/favicon-32x32.png">
+<link rel="apple-touch-icon" href="https://awbuana.github.io/apple-touch-icon.png">
+<link rel="mask-icon" href="https://awbuana.github.io/safari-pinned-tab.svg">
 <meta name="theme-color" content="#2e2e33">
 <meta name="msapplication-TileColor" content="#2e2e33">
-<link rel="alternate" hreflang="en" href="http://localhost:1313/posts/memory-non-compressible-resource/">
+<link rel="alternate" hreflang="en" href="https://awbuana.github.io/posts/memory-non-compressible-resource/">
 <noscript>
     <style>
         #theme-toggle,
@@ -70,12 +70,12 @@
         document.querySelector("html").dataset.theme = 'light';
     }
 
-</script><link rel="canonical" href="http://localhost:1313/posts/memory-non-compressible-resource/">
+</script><link rel="canonical" href="https://awbuana.github.io/posts/memory-non-compressible-resource/">
 <meta property="og:locale" content="en_US">
 <meta property="og:type" content="article">
 <meta property="og:title" content="Why Your Pod Died: The Brutal Difference Between CPU and Memory Limits - awbuana">
 <meta property="og:description" content="CPU throttles. Memory kills. Understanding this fundamental difference will save you from 3 AM pages.">
-<meta property="og:url" content="http://localhost:1313/posts/memory-non-compressible-resource/">
+<meta property="og:url" content="https://awbuana.github.io/posts/memory-non-compressible-resource/">
 <meta property="og:site_name" content="awbuana">
 
 <meta property="article:published_time" content="2026-03-19T00:00:00Z">
@@ -554,7 +554,7 @@
       font-size: 1.25rem;
     }
   }
-</style><meta property="og:url" content="http://localhost:1313/posts/memory-non-compressible-resource/">
+</style><meta property="og:url" content="https://awbuana.github.io/posts/memory-non-compressible-resource/">
   <meta property="og:site_name" content="awbuana">
   <meta property="og:title" content="Why Your Pod Died: The Brutal Difference Between CPU and Memory Limits">
   <meta property="og:description" content="CPU throttles. Memory kills. Understanding this fundamental difference will save you from 3 AM pages.">
@@ -568,10 +568,10 @@
     <meta property="article:tag" content="Memory">
     <meta property="article:tag" content="Performance">
     <meta property="article:tag" content="Troubleshooting">
-      <meta property="og:image" content="http://localhost:1313/images/profile.jpg">
+      <meta property="og:image" content="https://awbuana.github.io/images/profile.jpg">
 
   <meta name="twitter:card" content="summary_large_image">
-  <meta name="twitter:image" content="http://localhost:1313/images/profile.jpg">
+  <meta name="twitter:image" content="https://awbuana.github.io/images/profile.jpg">
   <meta name="twitter:title" content="Why Your Pod Died: The Brutal Difference Between CPU and Memory Limits">
   <meta name="twitter:description" content="CPU throttles. Memory kills. Understanding this fundamental difference will save you from 3 AM pages.">
 
@@ -585,13 +585,13 @@
       "@type": "ListItem",
       "position":  1 ,
       "name": "Posts",
-      "item": "http://localhost:1313/posts/"
+      "item": "https://awbuana.github.io/posts/"
     }, 
     {
       "@type": "ListItem",
       "position":  2 ,
       "name": "Why Your Pod Died: The Brutal Difference Between CPU and Memory Limits",
-      "item": "http://localhost:1313/posts/memory-non-compressible-resource/"
+      "item": "https://awbuana.github.io/posts/memory-non-compressible-resource/"
     }
   ]
 }
@@ -609,7 +609,7 @@
   "articleBody": "I used to think CPU and memory were the same.\nNot literally, of course. I knew one was for processing and one was for… well, memory. But when it came to Kubernetes resource limits, I treated them identically. Set a request, set a limit, let the scheduler do its thing. If the app needs more, it uses more, right?\nWrong.\nVery, very wrong.\nAnd I learned this lesson at 2 AM on a Tuesday, when our primary API service went from “healthy” to CrashLoopBackOff in about 30 seconds. No warning. No graceful degradation. Just… dead. Then alive. Then dead again.\nThe cause? A memory leak in the application. The trigger? A memory limit that was technically being enforced.\nThe Fundamental Difference Here’s what I wish someone had told me when I started with Kubernetes: CPU is compressible. Memory is not.\nWhen your container hits its CPU limit, Kubernetes doesn’t kill it. Instead, the CFS (Completely Fair Scheduler) starts throttling your process. Your app slows down, but it keeps running. It’s like driving with the parking brake on—you’re still moving, just slower.\nBut memory? Memory doesn’t throttle. When your container hits its memory limit, the Linux kernel steps in and invokes the OOM (Out of Memory) killer. Your process gets terminated. Immediately. No warning, no gradual slowdown, just SIGKILL.\nIt’s the difference between “you’re going too fast, slow down” and “you’re out of runway, eject now.”\nWhat Happens When CPU Hits the Limit Let me walk through what actually happens when your Go service (or Python, or Java, whatever you’re running) exceeds its CPU request:\nThe Setup:\n1 2 3 4 5 resources: requests: cpu: \"100m\" limits: cpu: \"500m\" Your container is happily processing requests, using about 200m of CPU on average. But then traffic spikes. Suddenly your app wants 600m.\nHere’s the sequence:\nThrottling begins: The CFS scheduler allocates CPU time in 100ms periods. With a 500m limit, your container gets 50ms of CPU time per period.\nYour app slows down: If your process needs 60ms of work in a period, it only gets 50ms. The remaining 10ms? It waits for the next period. Your response times increase.\nMetrics show the problem: Your container_cpu_cfs_throttled_periods_total metric starts climbing. You can see it happening.\nThe app stays alive: Crucially, your pod doesn’t restart. It’s slower, but it’s still serving traffic.\nThis is why CPU limits are “safer” in a sense—you get degraded performance, not downtime. It’s not ideal, but it’s survivable.\nWhat Happens When Memory Hits the Limit Now let’s look at memory with the same setup:\n1 2 3 4 5 resources: requests: memory: \"256Mi\" limits: memory: \"512Mi\" Your container is using 300Mi, well under the limit. But then that memory leak kicks in. Or a batch job starts processing larger files. Usage climbs: 400Mi, 450Mi, 500Mi…\nHere’s what happens:\nNo throttling: Unlike CPU, there’s no mechanism to slow down memory allocation. Your app keeps requesting memory.\nThe kernel notices: When your container’s memory usage approaches the 512Mi limit, the kernel’s memory subsystem flags it.\nOOM Killer activates: Once you hit that limit, the kernel’s Out-of-Memory killer evaluates your process. It calculates an “oom_score” based on factors like memory usage and runtime.\nSIGKILL: Your process receives SIGKILL (signal 9), which it cannot catch or ignore. The process terminates immediately.\nKubernetes responds: The kubelet notices the container exited with code 137 (128 + SIGKILL). It restarts the container if your pod has a restart policy.\nCrashLoopBackOff: If your app immediately tries to allocate the same amount of memory (because, say, it’s loading the same dataset), it gets killed again. After a few cycles, Kubernetes puts the pod in CrashLoopBackOff.\nThe worst part? From your application’s perspective, this is indistinguishable from a power failure. One moment it’s running, the next it’s gone. No stack trace. No graceful shutdown. Just… nothing.\nWhy This Matters for Your Debugging Understanding this distinction completely changed how I approach performance issues.\nIf you see slow response times → Check CPU throttling. Look at container_cpu_cfs_throttled_periods_total. If it’s increasing, you need more CPU requests, not limits.\nIf you see restart loops → Check memory. Look at container_memory_working_set_bytes and compare to your limit. If it’s consistently near the limit, you’re one allocation away from death.\nIf you see intermittent failures → Could be either, but memory is more likely to cause sudden, catastrophic failure. CPU throttling usually shows up as consistent slowness.\nThe Mindset Shift The biggest change for me was internalizing this: CPU limits are about performance. Memory limits are about survival.\nWhen you set a CPU limit, you’re saying “don’t use more than this much CPU.” When you set a memory limit, you’re saying “if you use more than this, you die.”\nThat changes how you should think about resource allocation:\nCPU requests/limits: Tune for performance and cost Memory requests/limits: Tune for stability and reliability I’d rather over-provision memory and waste some node capacity than under-provision and have my services dying randomly. The cost of unused memory is lower than the cost of 2 AM pages.\nFurther reading:\nQuality-of-Service for Memory Resources - Kubernetes blog on Memory QoS with cgroup v2 Kubernetes Resource Management OOM Killer Deep Dive ",
   "wordCount" : "859",
   "inLanguage": "en",
-  "image": "http://localhost:1313/images/profile.jpg","datePublished": "2026-03-19T00:00:00Z",
+  "image": "https://awbuana.github.io/images/profile.jpg","datePublished": "2026-03-19T00:00:00Z",
   "dateModified": "2026-03-19T00:00:00Z",
   "author":{
     "@type": "Person",
@@ -617,14 +617,14 @@
   },
   "mainEntityOfPage": {
     "@type": "WebPage",
-    "@id": "http://localhost:1313/posts/memory-non-compressible-resource/"
+    "@id": "https://awbuana.github.io/posts/memory-non-compressible-resource/"
   },
   "publisher": {
     "@type": "Organization",
     "name": "awbuana",
     "logo": {
       "@type": "ImageObject",
-      "url": "http://localhost:1313/favicon.ico"
+      "url": "https://awbuana.github.io/favicon.ico"
     }
   }
 }
@@ -634,7 +634,7 @@
     <header class="header">
     <nav class="nav">
         <div class="logo">
-            <a href="http://localhost:1313/" accesskey="h" title="awbuana (Alt + H)">awbuana</a>
+            <a href="https://awbuana.github.io/" accesskey="h" title="awbuana (Alt + H)">awbuana</a>
             <div class="logo-switches">
                 <button id="theme-toggle" accesskey="t" title="(Alt + T)" aria-label="Toggle theme">
                     <svg id="moon" xmlns="http://www.w3.org/2000/svg" width="24" height="18" viewBox="0 0 24 24"
@@ -660,22 +660,22 @@
         </div>
         <ul id="menu">
             <li>
-                <a href="http://localhost:1313/posts/" title="Posts">
+                <a href="https://awbuana.github.io/posts/" title="Posts">
                     <span>Posts</span>
                 </a>
             </li>
             <li>
-                <a href="http://localhost:1313/tags/" title="Tags">
+                <a href="https://awbuana.github.io/tags/" title="Tags">
                     <span>Tags</span>
                 </a>
             </li>
             <li>
-                <a href="http://localhost:1313/about/" title="About">
+                <a href="https://awbuana.github.io/about/" title="About">
                     <span>About</span>
                 </a>
             </li>
             <li>
-                <a href="http://localhost:1313/archive/" title="Archive">
+                <a href="https://awbuana.github.io/archive/" title="Archive">
                     <span>Archive</span>
                 </a>
             </li>
@@ -812,18 +812,18 @@
 
   <footer class="post-footer">
     <ul class="post-tags">
-      <li><a href="http://localhost:1313/tags/kubernetes/">Kubernetes</a></li>
-      <li><a href="http://localhost:1313/tags/devops/">Devops</a></li>
-      <li><a href="http://localhost:1313/tags/memory/">Memory</a></li>
-      <li><a href="http://localhost:1313/tags/performance/">Performance</a></li>
-      <li><a href="http://localhost:1313/tags/troubleshooting/">Troubleshooting</a></li>
+      <li><a href="https://awbuana.github.io/tags/kubernetes/">Kubernetes</a></li>
+      <li><a href="https://awbuana.github.io/tags/devops/">Devops</a></li>
+      <li><a href="https://awbuana.github.io/tags/memory/">Memory</a></li>
+      <li><a href="https://awbuana.github.io/tags/performance/">Performance</a></li>
+      <li><a href="https://awbuana.github.io/tags/troubleshooting/">Troubleshooting</a></li>
     </ul>
   </footer>
 </article>
     </main>
     
 <footer class="footer">
-        <span>&copy; 2026 <a href="http://localhost:1313/">awbuana</a></span> · 
+        <span>&copy; 2026 <a href="https://awbuana.github.io/">awbuana</a></span> · 
 
     <span>
         Powered by
