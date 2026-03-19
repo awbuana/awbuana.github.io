@@ -29,3 +29,6 @@ go.work.sum
 .agents/
 .claude/
 
+# public
+public/
+

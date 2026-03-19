@@ -34,19 +34,11 @@ theme = "hugo-PaperMod"
 
 [[params.socialIcons]]
   name = "linkedin"
-  url = "https://linkedin.com/in/awbuana"
+  url = "https://www.linkedin.com/in/agniwirab"
 
-[[params.socialIcons]]
-  name = "twitter"
-  url = "https://twitter.com/awbuana"
-
-[[params.socialIcons]]
-  name = "email"
-  url = "mailto:agni@wirabuana.com"
-
-  [params.PaperMod]
-    defaultTheme = "dark"
-    disableThemeToggle = false
+[params.PaperMod]
+  defaultTheme = "dark"
+  disableThemeToggle = false
   dateFormat = "January 2, 2006"
   math = true
   search = true
@@ -57,28 +49,28 @@ theme = "hugo-PaperMod"
   enableRobotsTXT = true
   trustedSources = ["github.com", ".githubusercontent.com", "golang.org", "play.golang.org"]
 
-  [params.PaperMod.cover]
-    hiddenInList = false
-    hiddenInSingle = false
+[params.PaperMod.cover]
+  hiddenInList = false
+  hiddenInSingle = false
 
-  [params.PaperMod.editPost]
-    URL = "https://github.com/awbuana/awbuana.github.io/edit/main/awbuana-blog"
-    Text = "Suggest changes to this page"
-    appendFilePath = true
+[params.PaperMod.editPost]
+  URL = "https://github.com/awbuana/awbuana.github.io/edit/main/awbuana-blog"
+  Text = "Suggest changes to this page"
+  appendFilePath = true
 
-  [params.PaperMod.analytics]
-    google = ""
-    cloudflare = ""
-    umami = ""
+[params.PaperMod.analytics]
+  google = ""
+  cloudflare = ""
+  umami = ""
 
-  [params.PaperMod.social]
-    github = "awbuana"
-    linkedin = "awbuana"
-    twitter = "awbuana"
-    instagram = ""
-    facebook = ""
-    email = "agni@wirabuana.com"
-    rss = true
+[params.PaperMod.social]
+  github = "awbuana"
+  linkedin = "awbuana"
+  twitter = "awbuana"
+  instagram = ""
+  facebook = ""
+  email = "agni@wirabuana.com"
+  rss = true
 
 [menu]
   [[menu.main]]
