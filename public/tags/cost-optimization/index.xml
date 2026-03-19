@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+  <channel>
+    <title>Cost-Optimization on awbuana</title>
+    <link>https://awbuana.github.io/tags/cost-optimization/</link>
+    <description>Recent content in Cost-Optimization on awbuana</description>
+    <image>
+      <title>awbuana</title>
+      <url>https://awbuana.github.io/images/profile.jpg</url>
+      <link>https://awbuana.github.io/images/profile.jpg</link>
+    </image>
+    <generator>Hugo</generator>
+    <language>en-us</language>
+    <lastBuildDate>Thu, 19 Mar 2026 00:00:00 +0000</lastBuildDate>
+    <atom:link href="https://awbuana.github.io/tags/cost-optimization/index.xml" rel="self" type="application/rss+xml" />
+    <item>
+      <title>The Resource Request You Think Is Saving Money Is Actually Breaking Your App</title>
+      <link>https://awbuana.github.io/posts/kubernetes-resource-optimization/</link>
+      <pubDate>Thu, 19 Mar 2026 00:00:00 +0000</pubDate>
+      <guid>https://awbuana.github.io/posts/kubernetes-resource-optimization/</guid>
+      <description>Most developers set Kubernetes resource requests wrong. Here&amp;#39;s what I learned about CPU throttling, bin packing, and why your optimized GKE cluster might be the problem.</description>
+    </item>
+  </channel>
+</rss>

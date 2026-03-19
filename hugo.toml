@@ -1,0 +1,134 @@
+baseURL = "https://awbuana.github.io/"
+locale = "en-us"
+title = "awbuana"
+theme = "hugo-PaperMod"
+
+[params]
+  env = "production"
+  description = "Personal blog of awbuana - thoughts, tutorials, and insights on software development, technology trends, and programming."
+  keywords = ["blog", "technology", "programming", "tutorials", "software development"]
+  author = "Agni Wira Buana"
+  images = ["images/profile.jpg"]
+  homeInfoMode = true
+  siteType = "Blog"
+  ogLocale = "en_US"
+  mainSection = "posts"
+
+[sitemap]
+  changefreq = "weekly"
+  filename = "sitemap.xml"
+  priority = 0.7
+
+[privacy]
+  [privacy.googleAnalytics]
+    anonymizeIP = true
+
+[params.homeInfoParams]
+  title = "awbuana"
+  headline = "Software Engineer & Problem Solver"
+  content = "Welcome to my digital garden! I write about software development, technology trends, and lessons learned along the way."
+
+[[params.socialIcons]]
+  name = "github"
+  url = "https://github.com/awbuana"
+
+[[params.socialIcons]]
+  name = "linkedin"
+  url = "https://linkedin.com/in/awbuana"
+
+[[params.socialIcons]]
+  name = "twitter"
+  url = "https://twitter.com/awbuana"
+
+[[params.socialIcons]]
+  name = "email"
+  url = "mailto:agni@wirabuana.com"
+
+  [params.PaperMod]
+    defaultTheme = "dark"
+    disableThemeToggle = false
+  dateFormat = "January 2, 2006"
+  math = true
+  search = true
+  pagination = true
+  showShareButtons = true
+  showReadingTime = true
+  showWordCount = true
+  enableRobotsTXT = true
+  trustedSources = ["github.com", ".githubusercontent.com", "golang.org", "play.golang.org"]
+
+  [params.PaperMod.cover]
+    hiddenInList = false
+    hiddenInSingle = false
+
+  [params.PaperMod.editPost]
+    URL = "https://github.com/awbuana/awbuana.github.io/edit/main/awbuana-blog"
+    Text = "Suggest changes to this page"
+    appendFilePath = true
+
+  [params.PaperMod.analytics]
+    google = ""
+    cloudflare = ""
+    umami = ""
+
+  [params.PaperMod.social]
+    github = "awbuana"
+    linkedin = "awbuana"
+    twitter = "awbuana"
+    instagram = ""
+    facebook = ""
+    email = "agni@wirabuana.com"
+    rss = true
+
+[menu]
+  [[menu.main]]
+    identifier = "posts"
+    name = "Posts"
+    url = "/posts/"
+    weight = 1
+  [[menu.main]]
+    identifier = "tags"
+    name = "Tags"
+    url = "/tags/"
+    weight = 2
+  [[menu.main]]
+    identifier = "about"
+    name = "About"
+    url = "/about/"
+    weight = 3
+  [[menu.main]]
+    identifier = "archive"
+    name = "Archive"
+    url = "/archive/"
+    weight = 4
+
+[markup]
+  [markup.goldmark]
+    [markup.goldmark.extensions]
+      definitionList = true
+      footnote = true
+      linkify = true
+      strikethrough = true
+      table = true
+      taskList = true
+      typographer = true
+    [markup.goldmark.renderer]
+      unsafe = true
+  [markup.highlight]
+    codeFences = true
+    lineNos = true
+    lineNumbersInTable = true
+    noClasses = false
+    style = "monokai"
+    tabWidth = 4
+  [markup.tableOfContents]
+    startLevel = 2
+    endLevel = 6
+    ordered = false
+
+[outputs]
+  home = ["HTML", "RSS", "JSON"]
+
+[taxonomies]
+  tag = "tags"
+  category = "categories"

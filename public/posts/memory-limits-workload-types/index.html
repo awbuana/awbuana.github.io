@@ -1,0 +1,1000 @@
+<!DOCTYPE html>
+<html lang="en" dir="auto" data-theme="auto">
+
+<head><script src="/livereload.js?mindelay=10&amp;v=2&amp;port=1313&amp;path=livereload" data-no-instant defer></script><meta charset="utf-8">
+<meta http-equiv="X-UA-Compatible" content="IE=edge">
+<meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+<meta name="robots" content="index, follow">
+<title>CPU Limits vs Memory Limits: When &#39;Survival&#39; Means Different Things | awbuana</title>
+<meta name="keywords" content="kubernetes, devops, architecture, stateful-apps, reliability">
+<meta name="description" content="I said memory limits are about survival. But what does &#39;survival&#39; actually mean for stateless vs stateful workloads? The answer surprised me.">
+<meta name="author" content="Agni Wira Buana">
+<link rel="canonical" href="http://localhost:1313/posts/memory-limits-workload-types/">
+<link crossorigin="anonymous" href="/assets/css/stylesheet.da3211e5ef867bf2b75fd5a6515cfed7195c011e8ab735694e203810a827097b.css" integrity="sha256-2jIR5e&#43;Ge/K3X9WmUVz&#43;1xlcAR6KtzVpTiA4EKgnCXs=" rel="preload stylesheet" as="style">
+<link rel="icon" href="http://localhost:1313/favicon.ico">
+<link rel="icon" type="image/png" sizes="16x16" href="http://localhost:1313/favicon-16x16.png">
+<link rel="icon" type="image/png" sizes="32x32" href="http://localhost:1313/favicon-32x32.png">
+<link rel="apple-touch-icon" href="http://localhost:1313/apple-touch-icon.png">
+<link rel="mask-icon" href="http://localhost:1313/safari-pinned-tab.svg">
+<meta name="theme-color" content="#2e2e33">
+<meta name="msapplication-TileColor" content="#2e2e33">
+<link rel="alternate" hreflang="en" href="http://localhost:1313/posts/memory-limits-workload-types/">
+<noscript>
+    <style>
+        #theme-toggle,
+        .top-link {
+            display: none;
+        }
+
+    </style>
+    <style>
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --theme: rgb(29, 30, 32);
+                --entry: rgb(46, 46, 51);
+                --primary: rgb(218, 218, 219);
+                --secondary: rgb(155, 156, 157);
+                --tertiary: rgb(65, 66, 68);
+                --content: rgb(196, 196, 197);
+                --code-block-bg: rgb(46, 46, 51);
+                --code-bg: rgb(55, 56, 62);
+                --border: rgb(51, 51, 51);
+                color-scheme: dark;
+            }
+
+            .list {
+                background: var(--theme);
+            }
+
+            .toc {
+                background: var(--entry);
+            }
+        }
+
+        @media (prefers-color-scheme: light) {
+            .list::-webkit-scrollbar-thumb {
+                border-color: var(--code-bg);
+            }
+        }
+
+    </style>
+</noscript>
+<script>
+    if (localStorage.getItem("pref-theme") === "dark") {
+        document.querySelector("html").dataset.theme = 'dark';
+    } else if (localStorage.getItem("pref-theme") === "light") {
+       document.querySelector("html").dataset.theme = 'light';
+    } else if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
+        document.querySelector("html").dataset.theme = 'dark';
+    } else {
+        document.querySelector("html").dataset.theme = 'light';
+    }
+
+</script><link rel="canonical" href="http://localhost:1313/posts/memory-limits-workload-types/">
+<meta property="og:locale" content="en_US">
+<meta property="og:type" content="article">
+<meta property="og:title" content="CPU Limits vs Memory Limits: When &#39;Survival&#39; Means Different Things - awbuana">
+<meta property="og:description" content="I said memory limits are about survival. But what does &#39;survival&#39; actually mean for stateless vs stateful workloads? The answer surprised me.">
+<meta property="og:url" content="http://localhost:1313/posts/memory-limits-workload-types/">
+<meta property="og:site_name" content="awbuana">
+
+<meta property="article:published_time" content="2026-03-19T00:00:00Z">
+<meta property="article:modified_time" content="2026-03-19T00:00:00Z">
+
+
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="CPU Limits vs Memory Limits: When &#39;Survival&#39; Means Different Things - awbuana">
+<meta name="twitter:description" content="I said memory limits are about survival. But what does &#39;survival&#39; actually mean for stateless vs stateful workloads? The answer surprised me.">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg-primary: #0a0a0a;
+    --bg-secondary: #141414;
+    --bg-tertiary: #1a1a1a;
+    --border-color: #262626;
+    --text-primary: #fafafa;
+    --text-secondary: #888888;
+    --text-muted: #555555;
+    --accent: #e5e5e5;
+    --code-bg: #1a1a1a;
+    --font-primary: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+    --font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
+  }
+
+  html {
+    font-family: var(--font-mono) !important;
+  }
+
+  body {
+    font-family: var(--font-mono) !important;
+  }
+
+  * {
+    font-family: var(--font-mono);
+  }
+
+   
+  html[data-theme="light"] {
+    --bg-primary: #f8f9fa;
+    --bg-secondary: #ffffff;
+    --bg-tertiary: #f1f3f4;
+    --border-color: #dadce0;
+    --text-primary: #202124;
+    --text-secondary: #5f6368;
+    --text-muted: #80868b;
+    --accent: #202124;
+    --code-bg: #f1f3f4;
+  }
+
+  html[data-theme="light"] ::selection {
+    background: rgba(32, 33, 36, 0.15);
+  }
+
+  html {
+    background: var(--bg-primary);
+    color: var(--text-primary);
+  }
+
+  body {
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    line-height: 1.6;
+  }
+
+  ::selection {
+    background: rgba(250, 250, 250, 0.15);
+    color: var(--text-primary);
+  }
+
+  a {
+    color: var(--text-primary);
+    text-decoration: none;
+    transition: opacity 0.2s ease;
+  }
+
+  a:hover {
+    opacity: 0.7;
+  }
+
+  code, pre, kbd {
+    font-family: var(--font-mono) !important;
+  }
+
+  .top-nav {
+    border-bottom: 1px solid var(--border-color) !important;
+    background: var(--bg-primary);
+  }
+
+  .top-nav ul {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+  }
+
+  .top-nav ul li {
+    display: inline-block;
+  }
+
+  .top-nav ul li a {
+    font-size: 0.9rem;
+    font-weight: 500;
+    color: var(--text-secondary) !important;
+    padding: 1rem 1.25rem;
+    display: block;
+    transition: color 0.2s ease;
+  }
+
+  .top-nav ul li a:hover,
+  .top-nav ul li a.active {
+    color: var(--text-primary) !important;
+    opacity: 1;
+  }
+
+  .home-info {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 2px;
+    padding: 3rem;
+    margin-bottom: 3rem;
+  }
+
+  .home-info .headline {
+    font-size: 2rem;
+    font-weight: 700;
+    color: var(--text-primary);
+    margin-bottom: 1rem;
+    letter-spacing: -0.02em;
+  }
+
+  .home-info .details {
+    color: var(--text-secondary);
+    font-size: 1.05rem;
+    line-height: 1.8;
+    max-width: 600px;
+  }
+
+  .home-info .details strong {
+    color: var(--text-primary);
+    font-weight: 500;
+  }
+
+  .social-icons {
+    margin-top: 2rem;
+    display: flex;
+    gap: 1rem;
+  }
+
+  .social-icons a {
+    color: var(--text-secondary);
+    font-size: 0.85rem;
+    font-weight: 500;
+    padding: 0.5rem 1rem;
+    border: 1px solid var(--border-color);
+    border-radius: 2px;
+    transition: all 0.2s ease;
+  }
+
+  .social-icons a:hover {
+    border-color: var(--text-secondary);
+    color: var(--text-primary);
+    opacity: 1;
+  }
+
+  .main-content {
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 0 1.5rem;
+  }
+
+  .post-entry {
+    position: relative;
+    margin-bottom: 3rem;
+    padding: 0 0 2rem 0;
+    background: transparent;
+    border: none;
+    border-radius: 0;
+    border-bottom: 1px solid var(--border-color);
+    transition: none;
+  }
+
+  .post-entry:first-child {
+    padding-top: 0;
+  }
+
+  .post-entry:last-child {
+    border-bottom: none;
+  }
+
+  .post-entry:active {
+    transform: none;
+  }
+
+  .post-entry .entry-header {
+    margin-bottom: 0.75rem;
+  }
+
+  .entry-cover {
+    margin: 0 0 1.5rem 0;
+    overflow: hidden;
+    border-radius: 6px;
+  }
+
+  .entry-cover img {
+    width: 100%;
+    height: auto;
+    max-height: 400px;
+    object-fit: cover;
+    display: block;
+    margin: 0;
+    border-radius: 6px;
+    transition: transform 0.4s ease;
+  }
+
+  .entry-cover a:hover img {
+    transform: scale(1.02);
+  }
+
+  .entry-cover a {
+    display: block;
+    box-shadow: none;
+  }
+
+  .post-content img {
+    max-width: 100%;
+    height: auto;
+    margin: 1.5rem 0;
+    border-radius: 2px;
+    display: block;
+  }
+
+  .entry-title {
+    font-size: 1.5rem;
+    font-weight: 600;
+    margin-bottom: 0.5rem;
+    letter-spacing: -0.01em;
+    line-height: 1.3;
+  }
+
+  .entry-title a {
+    color: var(--text-primary);
+  }
+
+  .entry-title a:hover {
+    opacity: 0.7;
+  }
+
+  .entry-header h2 {
+    font-size: 1.5rem;
+    line-height: 1.3;
+  }
+
+  .entry-meta {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    margin-bottom: 0.75rem;
+  }
+
+  .entry-content {
+    margin: 0.75rem 0;
+    color: var(--text-secondary);
+    font-size: 0.95rem;
+    line-height: 1.7;
+    overflow: hidden;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
+  }
+
+  .entry-footer {
+    margin-top: 1rem;
+    color: var(--text-muted);
+    font-size: 0.8rem;
+  }
+
+  .entry-summary {
+    color: var(--text-secondary);
+    font-size: 0.95rem;
+    line-height: 1.7;
+  }
+
+  .post-tags {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    margin-top: 1rem;
+  }
+
+  .post-tags a {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    padding: 0.25rem 0.75rem;
+    border: 1px solid var(--border-color);
+    border-radius: 2px;
+    transition: all 0.2s ease;
+  }
+
+  .post-tags a:hover {
+    border-color: var(--text-secondary);
+    color: var(--text-primary);
+    opacity: 1;
+  }
+
+  article {
+    border-bottom: 1px solid var(--border-color);
+    padding-bottom: 3rem;
+    margin-bottom: 3rem;
+  }
+
+  .post-title {
+    font-size: 2.25rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    margin-bottom: 1rem;
+    line-height: 1.2;
+  }
+
+  .post-meta {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    margin-bottom: 2rem;
+  }
+
+  .chip {
+    background: transparent;
+    color: var(--text-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 2px;
+    padding: 2px 8px;
+    font-size: 0.75rem;
+    font-weight: 500;
+  }
+
+  pre {
+    background: var(--code-bg) !important;
+    border: 1px solid var(--border-color);
+    border-radius: 2px;
+    padding: 1.25rem !important;
+    overflow-x: auto;
+    font-size: 0.875rem;
+    line-height: 1.7;
+  }
+
+  code {
+    background: var(--code-bg);
+    padding: 0.2em 0.4em;
+    border-radius: 2px;
+    font-size: 0.875em;
+    border: 1px solid var(--border-color);
+  }
+
+  pre code {
+    background: transparent;
+    padding: 0;
+    border: none;
+    border-radius: 0;
+  }
+
+  .copy-to-clipboard-button {
+    background: var(--bg-tertiary) !important;
+    border: 1px solid var(--border-color) !important;
+    border-radius: 2px !important;
+    color: var(--text-secondary) !important;
+    transition: all 0.2s ease !important;
+  }
+
+  .copy-to-clipboard-button:hover {
+    background: var(--border-color) !important;
+    color: var(--text-primary) !important;
+    opacity: 1;
+  }
+
+  blockquote {
+    border-left: 2px solid var(--text-secondary);
+    margin: 2rem 0;
+    padding: 0.5rem 0 0.5rem 1.5rem;
+    color: var(--text-secondary);
+    font-style: italic;
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 2rem 0;
+  }
+
+  table th,
+  table td {
+    border: 1px solid var(--border-color);
+    padding: 0.75rem 1rem;
+    text-align: left;
+  }
+
+  table th {
+    background: var(--bg-secondary);
+    font-weight: 600;
+    font-size: 0.85rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-secondary);
+  }
+
+  table tr:nth-child(even) {
+    background: var(--bg-secondary);
+  }
+
+  hr {
+    border: none;
+    border-top: 1px solid var(--border-color);
+    margin: 3rem 0;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    color: var(--text-primary);
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    line-height: 1.3;
+  }
+
+  h1 { font-size: 2rem; }
+  h2 { font-size: 1.5rem; }
+  h3 { font-size: 1.25rem; }
+
+  .footer {
+    border-top: 1px solid var(--border-color);
+    padding: 2rem 0;
+    margin-top: 4rem;
+  }
+
+  .footer a {
+    color: var(--text-muted);
+  }
+
+  .footer a:hover {
+    color: var(--text-secondary);
+    opacity: 1;
+  }
+
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: var(--bg-primary);
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: var(--border-color);
+    border-radius: 3px;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--text-muted);
+  }
+
+  @media (max-width: 768px) {
+    .home-info {
+      padding: 2rem 1.5rem;
+    }
+
+    .home-info .headline {
+      font-size: 1.5rem;
+    }
+
+    .post-title {
+      font-size: 1.75rem;
+    }
+
+    .entry-title {
+      font-size: 1.25rem;
+    }
+  }
+</style><meta property="og:url" content="http://localhost:1313/posts/memory-limits-workload-types/">
+  <meta property="og:site_name" content="awbuana">
+  <meta property="og:title" content="CPU Limits vs Memory Limits: When &#39;Survival&#39; Means Different Things">
+  <meta property="og:description" content="I said memory limits are about survival. But what does &#39;survival&#39; actually mean for stateless vs stateful workloads? The answer surprised me.">
+  <meta property="og:locale" content="en_us">
+  <meta property="og:type" content="article">
+    <meta property="article:section" content="posts">
+    <meta property="article:published_time" content="2026-03-19T00:00:00+00:00">
+    <meta property="article:modified_time" content="2026-03-19T00:00:00+00:00">
+    <meta property="article:tag" content="Kubernetes">
+    <meta property="article:tag" content="Devops">
+    <meta property="article:tag" content="Architecture">
+    <meta property="article:tag" content="Stateful-Apps">
+    <meta property="article:tag" content="Reliability">
+      <meta property="og:image" content="http://localhost:1313/images/profile.jpg">
+
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:image" content="http://localhost:1313/images/profile.jpg">
+  <meta name="twitter:title" content="CPU Limits vs Memory Limits: When &#39;Survival&#39; Means Different Things">
+  <meta name="twitter:description" content="I said memory limits are about survival. But what does &#39;survival&#39; actually mean for stateless vs stateful workloads? The answer surprised me.">
+
+
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "BreadcrumbList",
+  "itemListElement": [
+    {
+      "@type": "ListItem",
+      "position":  1 ,
+      "name": "Posts",
+      "item": "http://localhost:1313/posts/"
+    }, 
+    {
+      "@type": "ListItem",
+      "position":  2 ,
+      "name": "CPU Limits vs Memory Limits: When 'Survival' Means Different Things",
+      "item": "http://localhost:1313/posts/memory-limits-workload-types/"
+    }
+  ]
+}
+</script>
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "CPU Limits vs Memory Limits: When 'Survival' Means Different Things",
+  "name": "CPU Limits vs Memory Limits: When \u0027Survival\u0027 Means Different Things",
+  "description": "I said memory limits are about survival. But what does 'survival' actually mean for stateless vs stateful workloads? The answer surprised me.",
+  "keywords": [
+    "kubernetes", "devops", "architecture", "stateful-apps", "reliability"
+  ],
+  "articleBody": "In my previous post, I said: “CPU limits are about performance. Memory limits are about survival.” I stand by that statement, but I oversimplified what “survival” actually means depending on what kind of application you’re running.\nLet me break this down.\nStateless Applications: The “Easy” Case When I wrote about memory limits being “about survival,” I was thinking primarily of stateless services. You know, the typical microservices: APIs, web servers, queue consumers.\nFor these apps, an OOMKill looks like this:\nRequest comes in Memory spikes (maybe a large payload, maybe a leak) OOM Killer terminates the pod Kubernetes restarts it Service continues The blast radius is limited. Yes, that one request failed. Yes, there’s a brief interruption. But the system recovers automatically. The “survival” here is about keeping the service available, not about protecting data.\nThis is what I had in mind when I wrote about memory limits. And honestly? This is the best-case scenario for an OOMKill.\nStateful Applications: Where It Gets Painful Here’s where I need to correct myself. For stateful applications, memory limits aren’t just about survival—they’re about preventing catastrophic data loss and expensive recovery operations.\nDatabases When your PostgreSQL or MongoDB pod gets OOMKilled:\nActive connections drop immediately In-flight transactions rollback (if you’re lucky and have proper transactions) Write-ahead logs might not be fully flushed Replication lag increases while the replica restarts Cache is cold after restart, causing performance degradation The pod restarts, sure. But now you’re potentially dealing with:\nData consistency issues Replication catch-up time Connection storms as clients retry Query performance degradation due to cold caches Message Queues (Kafka, RabbitMQ, NATS) This is where I learned my lesson the hard way.\nWhen a Kafka broker gets OOMKilled:\nIn-flight messages are lost if they weren’t replicated yet Consumer lag spikes while the broker restarts and recovers Partition rebalancing causes additional latency Replication stalls as followers catch up We had this happen in production. A broker with insufficient memory got killed during a traffic spike. The cluster survived (Kafka is designed for this), but:\nWe lost about 30 seconds of messages that hadn’t replicated Consumer lag went from 0 to 50,000 messages It took 20 minutes for the cluster to fully rebalance Our “exactly once” processing guarantee became “at least once” (duplicate processing) The pod survived. The data mostly survived. But our guarantees didn’t.\nCaches (Redis, Memcached) Redis getting OOMKilled is especially painful:\nAll in-memory data is gone (unless you have persistence enabled) Cache warming takes time and hits your database hard Session data lost if you’re using Redis for sessions Rate limiting counters reset if you’re using Redis for throttling I once saw a Redis instance with 40GB of cached data get OOMKilled. It took 3 hours to rebuild the cache from the database, during which our database CPU was pegged at 100%.\nDistributed Systems (etcd, ZooKeeper, Consul) These are the worst-case scenario.\nWhen an etcd member gets OOMKilled:\nQuorum might be lost if you lose enough members Leader election has to happen All Kubernetes API operations stall (if it’s your cluster etcd) Distributed locks get released unexpectedly I don’t have personal war stories here, thank god. But I’ve read the post-mortems. Losing etcd quorum is a “page everyone, wake up the VP” kind of incident.\nBatch Jobs: The Silent Killer I completely overlooked batch jobs in my original post.\nFor batch processing (ETL jobs, ML training, data migrations):\nOOMKill = job failure Job failure = wasted compute resources Wasted compute = money down the drain A batch job that runs for 6 hours and then gets OOMKilled in the final stage? That’s 6 hours of compute wasted. If it’s a $5/hour GPU instance, you just burned $30 and have to start over.\nThe “survival” here is about completing the work, not just keeping the process running.\nSidecars and DaemonSets: The Observability Trap Here’s one I didn’t consider: what happens when your monitoring or logging sidecar gets OOMKilled?\nYour main application keeps running. It looks healthy. But:\nLogs stop flowing to your aggregation system Metrics aren’t collected You have a blind spot I saw this happen with a Prometheus node-exporter. It got OOMKilled during a load spike. The application was “healthy” according to Kubernetes, but we had no metrics for 10 minutes. We didn’t know there was a problem until the customer called.\nSo What Does “Survival” Really Mean? Let me revise my earlier statement:\nFor stateless apps: Survival means keeping the service available and responsive.\nFor stateful apps: Survival means preventing data loss, maintaining consistency guarantees, and avoiding expensive recovery operations.\nFor batch jobs: Survival means completing the work without wasting compute resources.\nFor sidecars: Survival means maintaining observability and control plane functions.\nThe memory limit isn’t just protecting the process—it’s protecting your data, your guarantees, your compute budget, and your visibility.\nRethinking Resource Allocation by Workload Type Given this, here’s how I approach memory limits now:\nStateless Services 1 2 3 4 5 resources: requests: memory: \"512Mi\" limits: memory: \"512Mi\" # Match request for Guaranteed QoS Conservative but safe. I can scale horizontally if I need more capacity.\nDatabases 1 2 3 4 5 resources: requests: memory: \"8Gi\" limits: memory: \"10Gi\" # Some headroom, but not too much I leave a small gap (20-25%) for burst allocation, but I monitor closely. I want to know if we’re approaching the limit so I can scale vertically before an OOMKill happens.\nMessage Queues 1 2 3 4 5 resources: requests: memory: \"16Gi\" limits: memory: \"16Gi\" # Hard limit matching request No room for error. I’d rather provision too much memory than risk losing messages.\nBatch Jobs 1 2 3 4 5 resources: requests: memory: \"4Gi\" limits: memory: \"8Gi\" # Generous headroom Batch jobs often have spiky memory usage. I’d rather over-provision than restart a 6-hour job.\nSidecars (logging, monitoring) 1 2 3 4 5 resources: requests: memory: \"128Mi\" limits: memory: \"256Mi\" # Generous headroom for log bursts These need to survive traffic spikes in the main application. Don’t let your observability die when you need it most.\nThe Real Lesson What you’re surviving depends on what you’re running.\nFor a stateless API, survival means the service stays up. For a database, survival means your data stays consistent. For a batch job, survival means the work completes. For a sidecar, survival means you can still see what’s happening.\nThe cost of an OOMKill isn’t just the restart time. It’s:\nData loss (stateful apps) Consistency violations (distributed systems) Wasted compute (batch jobs) Blind spots (observability) Customer impact (everything) So yes, memory limits are about survival. But “survival” means different things for different workloads. Understanding your specific failure modes is what separates a working system from a reliable one. That’s the real difference between CPU and memory limits. CPU throttling gives you time to react. Memory limits give you… well, they give you a restart loop and a pager notification. Plan accordingly.\nFurther reading:\nQuality-of-Service for Memory Resources - Kubernetes blog on Memory QoS OOM Killer Deep Dive Redis Persistence Documentation Kafka Replication and ISR ",
+  "wordCount" : "1167",
+  "inLanguage": "en",
+  "image": "http://localhost:1313/images/profile.jpg","datePublished": "2026-03-19T00:00:00Z",
+  "dateModified": "2026-03-19T00:00:00Z",
+  "author":{
+    "@type": "Person",
+    "name": "Agni Wira Buana"
+  },
+  "mainEntityOfPage": {
+    "@type": "WebPage",
+    "@id": "http://localhost:1313/posts/memory-limits-workload-types/"
+  },
+  "publisher": {
+    "@type": "Organization",
+    "name": "awbuana",
+    "logo": {
+      "@type": "ImageObject",
+      "url": "http://localhost:1313/favicon.ico"
+    }
+  }
+}
+</script>
+</head>
+<body id="top">
+    <header class="header">
+    <nav class="nav">
+        <div class="logo">
+            <a href="http://localhost:1313/" accesskey="h" title="awbuana (Alt + H)">awbuana</a>
+            <div class="logo-switches">
+                <button id="theme-toggle" accesskey="t" title="(Alt + T)" aria-label="Toggle theme">
+                    <svg id="moon" xmlns="http://www.w3.org/2000/svg" width="24" height="18" viewBox="0 0 24 24"
+                        fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                        stroke-linejoin="round">
+                        <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+                    </svg>
+                    <svg id="sun" xmlns="http://www.w3.org/2000/svg" width="24" height="18" viewBox="0 0 24 24"
+                        fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                        stroke-linejoin="round">
+                        <circle cx="12" cy="12" r="5"></circle>
+                        <line x1="12" y1="1" x2="12" y2="3"></line>
+                        <line x1="12" y1="21" x2="12" y2="23"></line>
+                        <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+                        <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+                        <line x1="1" y1="12" x2="3" y2="12"></line>
+                        <line x1="21" y1="12" x2="23" y2="12"></line>
+                        <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+                        <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+                    </svg>
+                </button>
+            </div>
+        </div>
+        <ul id="menu">
+            <li>
+                <a href="http://localhost:1313/posts/" title="Posts">
+                    <span>Posts</span>
+                </a>
+            </li>
+            <li>
+                <a href="http://localhost:1313/tags/" title="Tags">
+                    <span>Tags</span>
+                </a>
+            </li>
+            <li>
+                <a href="http://localhost:1313/about/" title="About">
+                    <span>About</span>
+                </a>
+            </li>
+            <li>
+                <a href="http://localhost:1313/archive/" title="Archive">
+                    <span>Archive</span>
+                </a>
+            </li>
+        </ul>
+    </nav>
+</header>
+<main class="main">
+
+<article class="post-single">
+  <header class="post-header">
+    
+    <h1 class="post-title entry-hint-parent">
+      CPU Limits vs Memory Limits: When &#39;Survival&#39; Means Different Things
+    </h1>
+    <div class="post-description">
+      I said memory limits are about survival. But what does &#39;survival&#39; actually mean for stateless vs stateful workloads? The answer surprised me.
+    </div>
+    <div class="post-meta"><span title='2026-03-19 00:00:00 +0000 UTC'>March 19, 2026</span>&nbsp;·&nbsp;<span>Agni Wira Buana</span>
+
+</div>
+  </header> 
+  <div class="post-content"><p>In my previous post, I said: <strong>&ldquo;CPU limits are about performance. Memory limits are about survival.&rdquo;</strong> I stand by that statement, but I oversimplified what &ldquo;survival&rdquo; actually means depending on what kind of application you&rsquo;re running.</p>
+<p>Let me break this down.</p>
+<h2 id="stateless-applications-the-easy-case">Stateless Applications: The &ldquo;Easy&rdquo; Case<a hidden class="anchor" aria-hidden="true" href="#stateless-applications-the-easy-case">#</a></h2>
+<p>When I wrote about memory limits being &ldquo;about survival,&rdquo; I was thinking primarily of stateless services. You know, the typical microservices: APIs, web servers, queue consumers.</p>
+<p>For these apps, an OOMKill looks like this:</p>
+<ol>
+<li><strong>Request comes in</strong></li>
+<li><strong>Memory spikes</strong> (maybe a large payload, maybe a leak)</li>
+<li><strong>OOM Killer terminates the pod</strong></li>
+<li><strong>Kubernetes restarts it</strong></li>
+<li><strong>Service continues</strong></li>
+</ol>
+<p>The blast radius is limited. Yes, that one request failed. Yes, there&rsquo;s a brief interruption. But the system recovers automatically. The &ldquo;survival&rdquo; here is about keeping the service available, not about protecting data.</p>
+<p>This is what I had in mind when I wrote about memory limits. And honestly? This is the best-case scenario for an OOMKill.</p>
+<h2 id="stateful-applications-where-it-gets-painful">Stateful Applications: Where It Gets Painful<a hidden class="anchor" aria-hidden="true" href="#stateful-applications-where-it-gets-painful">#</a></h2>
+<p>Here&rsquo;s where I need to correct myself. For stateful applications, memory limits aren&rsquo;t just about survival—they&rsquo;re about <strong>preventing catastrophic data loss and expensive recovery operations</strong>.</p>
+<h3 id="databases">Databases<a hidden class="anchor" aria-hidden="true" href="#databases">#</a></h3>
+<p>When your PostgreSQL or MongoDB pod gets OOMKilled:</p>
+<ul>
+<li><strong>Active connections drop</strong> immediately</li>
+<li><strong>In-flight transactions rollback</strong> (if you&rsquo;re lucky and have proper transactions)</li>
+<li><strong>Write-ahead logs might not be fully flushed</strong></li>
+<li><strong>Replication lag</strong> increases while the replica restarts</li>
+<li><strong>Cache is cold</strong> after restart, causing performance degradation</li>
+</ul>
+<p>The pod restarts, sure. But now you&rsquo;re potentially dealing with:</p>
+<ul>
+<li>Data consistency issues</li>
+<li>Replication catch-up time</li>
+<li>Connection storms as clients retry</li>
+<li>Query performance degradation due to cold caches</li>
+</ul>
+<h3 id="message-queues-kafka-rabbitmq-nats">Message Queues (Kafka, RabbitMQ, NATS)<a hidden class="anchor" aria-hidden="true" href="#message-queues-kafka-rabbitmq-nats">#</a></h3>
+<p>This is where I learned my lesson the hard way.</p>
+<p>When a Kafka broker gets OOMKilled:</p>
+<ul>
+<li><strong>In-flight messages are lost</strong> if they weren&rsquo;t replicated yet</li>
+<li><strong>Consumer lag spikes</strong> while the broker restarts and recovers</li>
+<li><strong>Partition rebalancing</strong> causes additional latency</li>
+<li><strong>Replication stalls</strong> as followers catch up</li>
+</ul>
+<p>We had this happen in production. A broker with insufficient memory got killed during a traffic spike. The cluster survived (Kafka is designed for this), but:</p>
+<ul>
+<li>We lost about 30 seconds of messages that hadn&rsquo;t replicated</li>
+<li>Consumer lag went from 0 to 50,000 messages</li>
+<li>It took 20 minutes for the cluster to fully rebalance</li>
+<li>Our &ldquo;exactly once&rdquo; processing guarantee became &ldquo;at least once&rdquo; (duplicate processing)</li>
+</ul>
+<p>The pod survived. The data mostly survived. But our guarantees didn&rsquo;t.</p>
+<h3 id="caches-redis-memcached">Caches (Redis, Memcached)<a hidden class="anchor" aria-hidden="true" href="#caches-redis-memcached">#</a></h3>
+<p>Redis getting OOMKilled is especially painful:</p>
+<ul>
+<li><strong>All in-memory data is gone</strong> (unless you have persistence enabled)</li>
+<li><strong>Cache warming</strong> takes time and hits your database hard</li>
+<li><strong>Session data lost</strong> if you&rsquo;re using Redis for sessions</li>
+<li><strong>Rate limiting counters reset</strong> if you&rsquo;re using Redis for throttling</li>
+</ul>
+<p>I once saw a Redis instance with 40GB of cached data get OOMKilled. It took 3 hours to rebuild the cache from the database, during which our database CPU was pegged at 100%.</p>
+<h3 id="distributed-systems-etcd-zookeeper-consul">Distributed Systems (etcd, ZooKeeper, Consul)<a hidden class="anchor" aria-hidden="true" href="#distributed-systems-etcd-zookeeper-consul">#</a></h3>
+<p>These are the worst-case scenario.</p>
+<p>When an etcd member gets OOMKilled:</p>
+<ul>
+<li><strong>Quorum might be lost</strong> if you lose enough members</li>
+<li><strong>Leader election</strong> has to happen</li>
+<li><strong>All Kubernetes API operations stall</strong> (if it&rsquo;s your cluster etcd)</li>
+<li><strong>Distributed locks get released</strong> unexpectedly</li>
+</ul>
+<p>I don&rsquo;t have personal war stories here, thank god. But I&rsquo;ve read the post-mortems. Losing etcd quorum is a &ldquo;page everyone, wake up the VP&rdquo; kind of incident.</p>
+<h2 id="batch-jobs-the-silent-killer">Batch Jobs: The Silent Killer<a hidden class="anchor" aria-hidden="true" href="#batch-jobs-the-silent-killer">#</a></h2>
+<p>I completely overlooked batch jobs in my original post.</p>
+<p>For batch processing (ETL jobs, ML training, data migrations):</p>
+<ul>
+<li><strong>OOMKill = job failure</strong></li>
+<li><strong>Job failure = wasted compute resources</strong></li>
+<li><strong>Wasted compute = money down the drain</strong></li>
+</ul>
+<p>A batch job that runs for 6 hours and then gets OOMKilled in the final stage? That&rsquo;s 6 hours of compute wasted. If it&rsquo;s a $5/hour GPU instance, you just burned $30 and have to start over.</p>
+<p>The &ldquo;survival&rdquo; here is about completing the work, not just keeping the process running.</p>
+<h2 id="sidecars-and-daemonsets-the-observability-trap">Sidecars and DaemonSets: The Observability Trap<a hidden class="anchor" aria-hidden="true" href="#sidecars-and-daemonsets-the-observability-trap">#</a></h2>
+<p>Here&rsquo;s one I didn&rsquo;t consider: what happens when your monitoring or logging sidecar gets OOMKilled?</p>
+<p>Your main application keeps running. It looks healthy. But:</p>
+<ul>
+<li><strong>Logs stop flowing</strong> to your aggregation system</li>
+<li><strong>Metrics aren&rsquo;t collected</strong></li>
+<li><strong>You have a blind spot</strong></li>
+</ul>
+<p>I saw this happen with a Prometheus node-exporter. It got OOMKilled during a load spike. The application was &ldquo;healthy&rdquo; according to Kubernetes, but we had no metrics for 10 minutes. We didn&rsquo;t know there was a problem until the customer called.</p>
+<h2 id="so-what-does-survival-really-mean">So What Does &ldquo;Survival&rdquo; Really Mean?<a hidden class="anchor" aria-hidden="true" href="#so-what-does-survival-really-mean">#</a></h2>
+<p>Let me revise my earlier statement:</p>
+<p><strong>For stateless apps:</strong> Survival means keeping the service available and responsive.</p>
+<p><strong>For stateful apps:</strong> Survival means preventing data loss, maintaining consistency guarantees, and avoiding expensive recovery operations.</p>
+<p><strong>For batch jobs:</strong> Survival means completing the work without wasting compute resources.</p>
+<p><strong>For sidecars:</strong> Survival means maintaining observability and control plane functions.</p>
+<p>The memory limit isn&rsquo;t just protecting the process—it&rsquo;s protecting your data, your guarantees, your compute budget, and your visibility.</p>
+<h2 id="rethinking-resource-allocation-by-workload-type">Rethinking Resource Allocation by Workload Type<a hidden class="anchor" aria-hidden="true" href="#rethinking-resource-allocation-by-workload-type">#</a></h2>
+<p>Given this, here&rsquo;s how I approach memory limits now:</p>
+<h3 id="stateless-services">Stateless Services<a hidden class="anchor" aria-hidden="true" href="#stateless-services">#</a></h3>
+<div class="highlight"><div class="chroma">
+<table class="lntable"><tr><td class="lntd">
+<pre tabindex="0" class="chroma"><code><span class="lnt">1
+</span><span class="lnt">2
+</span><span class="lnt">3
+</span><span class="lnt">4
+</span><span class="lnt">5
+</span></code></pre></td>
+<td class="lntd">
+<pre tabindex="0" class="chroma"><code class="language-yaml" data-lang="yaml"><span class="line"><span class="cl"><span class="nt">resources</span><span class="p">:</span><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">  </span><span class="nt">requests</span><span class="p">:</span><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">    </span><span class="nt">memory</span><span class="p">:</span><span class="w"> </span><span class="s2">&#34;512Mi&#34;</span><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">  </span><span class="nt">limits</span><span class="p">:</span><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">    </span><span class="nt">memory</span><span class="p">:</span><span class="w"> </span><span class="s2">&#34;512Mi&#34;</span><span class="w">  </span><span class="c"># Match request for Guaranteed QoS</span><span class="w">
+</span></span></span></code></pre></td></tr></table>
+</div>
+</div><p>Conservative but safe. I can scale horizontally if I need more capacity.</p>
+<h3 id="databases-1">Databases<a hidden class="anchor" aria-hidden="true" href="#databases-1">#</a></h3>
+<div class="highlight"><div class="chroma">
+<table class="lntable"><tr><td class="lntd">
+<pre tabindex="0" class="chroma"><code><span class="lnt">1
+</span><span class="lnt">2
+</span><span class="lnt">3
+</span><span class="lnt">4
+</span><span class="lnt">5
+</span></code></pre></td>
+<td class="lntd">
+<pre tabindex="0" class="chroma"><code class="language-yaml" data-lang="yaml"><span class="line"><span class="cl"><span class="nt">resources</span><span class="p">:</span><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">  </span><span class="nt">requests</span><span class="p">:</span><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">    </span><span class="nt">memory</span><span class="p">:</span><span class="w"> </span><span class="s2">&#34;8Gi&#34;</span><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">  </span><span class="nt">limits</span><span class="p">:</span><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">    </span><span class="nt">memory</span><span class="p">:</span><span class="w"> </span><span class="s2">&#34;10Gi&#34;</span><span class="w">  </span><span class="c"># Some headroom, but not too much</span><span class="w">
+</span></span></span></code></pre></td></tr></table>
+</div>
+</div><p>I leave a small gap (20-25%) for burst allocation, but I monitor closely. I want to know if we&rsquo;re approaching the limit so I can scale vertically before an OOMKill happens.</p>
+<h3 id="message-queues">Message Queues<a hidden class="anchor" aria-hidden="true" href="#message-queues">#</a></h3>
+<div class="highlight"><div class="chroma">
+<table class="lntable"><tr><td class="lntd">
+<pre tabindex="0" class="chroma"><code><span class="lnt">1
+</span><span class="lnt">2
+</span><span class="lnt">3
+</span><span class="lnt">4
+</span><span class="lnt">5
+</span></code></pre></td>
+<td class="lntd">
+<pre tabindex="0" class="chroma"><code class="language-yaml" data-lang="yaml"><span class="line"><span class="cl"><span class="nt">resources</span><span class="p">:</span><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">  </span><span class="nt">requests</span><span class="p">:</span><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">    </span><span class="nt">memory</span><span class="p">:</span><span class="w"> </span><span class="s2">&#34;16Gi&#34;</span><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">  </span><span class="nt">limits</span><span class="p">:</span><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">    </span><span class="nt">memory</span><span class="p">:</span><span class="w"> </span><span class="s2">&#34;16Gi&#34;</span><span class="w">  </span><span class="c"># Hard limit matching request</span><span class="w">
+</span></span></span></code></pre></td></tr></table>
+</div>
+</div><p>No room for error. I&rsquo;d rather provision too much memory than risk losing messages.</p>
+<h3 id="batch-jobs">Batch Jobs<a hidden class="anchor" aria-hidden="true" href="#batch-jobs">#</a></h3>
+<div class="highlight"><div class="chroma">
+<table class="lntable"><tr><td class="lntd">
+<pre tabindex="0" class="chroma"><code><span class="lnt">1
+</span><span class="lnt">2
+</span><span class="lnt">3
+</span><span class="lnt">4
+</span><span class="lnt">5
+</span></code></pre></td>
+<td class="lntd">
+<pre tabindex="0" class="chroma"><code class="language-yaml" data-lang="yaml"><span class="line"><span class="cl"><span class="nt">resources</span><span class="p">:</span><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">  </span><span class="nt">requests</span><span class="p">:</span><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">    </span><span class="nt">memory</span><span class="p">:</span><span class="w"> </span><span class="s2">&#34;4Gi&#34;</span><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">  </span><span class="nt">limits</span><span class="p">:</span><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">    </span><span class="nt">memory</span><span class="p">:</span><span class="w"> </span><span class="s2">&#34;8Gi&#34;</span><span class="w">  </span><span class="c"># Generous headroom</span><span class="w">
+</span></span></span></code></pre></td></tr></table>
+</div>
+</div><p>Batch jobs often have spiky memory usage. I&rsquo;d rather over-provision than restart a 6-hour job.</p>
+<h3 id="sidecars-logging-monitoring">Sidecars (logging, monitoring)<a hidden class="anchor" aria-hidden="true" href="#sidecars-logging-monitoring">#</a></h3>
+<div class="highlight"><div class="chroma">
+<table class="lntable"><tr><td class="lntd">
+<pre tabindex="0" class="chroma"><code><span class="lnt">1
+</span><span class="lnt">2
+</span><span class="lnt">3
+</span><span class="lnt">4
+</span><span class="lnt">5
+</span></code></pre></td>
+<td class="lntd">
+<pre tabindex="0" class="chroma"><code class="language-yaml" data-lang="yaml"><span class="line"><span class="cl"><span class="nt">resources</span><span class="p">:</span><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">  </span><span class="nt">requests</span><span class="p">:</span><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">    </span><span class="nt">memory</span><span class="p">:</span><span class="w"> </span><span class="s2">&#34;128Mi&#34;</span><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">  </span><span class="nt">limits</span><span class="p">:</span><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">    </span><span class="nt">memory</span><span class="p">:</span><span class="w"> </span><span class="s2">&#34;256Mi&#34;</span><span class="w">  </span><span class="c"># Generous headroom for log bursts</span><span class="w">
+</span></span></span></code></pre></td></tr></table>
+</div>
+</div><p>These need to survive traffic spikes in the main application. Don&rsquo;t let your observability die when you need it most.</p>
+<h2 id="the-real-lesson">The Real Lesson<a hidden class="anchor" aria-hidden="true" href="#the-real-lesson">#</a></h2>
+<p>What you&rsquo;re surviving <em>depends on what you&rsquo;re running</em>.</p>
+<p>For a stateless API, survival means the service stays up. For a database, survival means your data stays consistent. For a batch job, survival means the work completes. For a sidecar, survival means you can still see what&rsquo;s happening.</p>
+<p>The cost of an OOMKill isn&rsquo;t just the restart time. It&rsquo;s:</p>
+<ul>
+<li><strong>Data loss</strong> (stateful apps)</li>
+<li><strong>Consistency violations</strong> (distributed systems)</li>
+<li><strong>Wasted compute</strong> (batch jobs)</li>
+<li><strong>Blind spots</strong> (observability)</li>
+<li><strong>Customer impact</strong> (everything)</li>
+</ul>
+<p>So yes, memory limits are about survival. But &ldquo;survival&rdquo; means different things for different workloads. Understanding your specific failure modes is what separates a working system from a reliable one.
+That&rsquo;s the real difference between CPU and memory limits. CPU throttling gives you time to react. Memory limits give you&hellip; well, they give you a restart loop and a pager notification. Plan accordingly.</p>
+<hr>
+<p><strong>Further reading:</strong></p>
+<ul>
+<li><a href="https://kubernetes.io/blog/2021/11/26/qos-memory-resources/">Quality-of-Service for Memory Resources</a> - Kubernetes blog on Memory QoS</li>
+<li><a href="https://www.kernel.org/doc/gorman/html/understand/understand016.html">OOM Killer Deep Dive</a></li>
+<li><a href="https://redis.io/docs/management/persistence/">Redis Persistence Documentation</a></li>
+<li><a href="https://kafka.apache.org/documentation/#replication">Kafka Replication and ISR</a></li>
+</ul>
+
+
+  </div>
+
+  <footer class="post-footer">
+    <ul class="post-tags">
+      <li><a href="http://localhost:1313/tags/kubernetes/">Kubernetes</a></li>
+      <li><a href="http://localhost:1313/tags/devops/">Devops</a></li>
+      <li><a href="http://localhost:1313/tags/architecture/">Architecture</a></li>
+      <li><a href="http://localhost:1313/tags/stateful-apps/">Stateful-Apps</a></li>
+      <li><a href="http://localhost:1313/tags/reliability/">Reliability</a></li>
+    </ul>
+  </footer>
+</article>
+    </main>
+    
+<footer class="footer">
+        <span>&copy; 2026 <a href="http://localhost:1313/">awbuana</a></span> · 
+
+    <span>
+        Powered by
+        <a href="https://gohugo.io/" rel="noopener noreferrer" target="_blank">Hugo</a> &
+        <a href="https://github.com/adityatelange/hugo-PaperMod/" rel="noopener" target="_blank">PaperMod</a>
+    </span>
+</footer>
+<a href="#top" aria-label="go to top" title="Go to Top (Alt + G)" class="top-link" id="top-link" accesskey="g">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 12 6" fill="currentColor">
+        <path d="M12 6H0l6-6z" />
+    </svg>
+</a>
+
+<script>
+    let menu = document.getElementById('menu');
+    if (menu) {
+        
+        const scrollPosition = localStorage.getItem("menu-scroll-position");
+        if (scrollPosition) {
+            menu.scrollLeft = parseInt(scrollPosition, 10);
+        }
+        
+        menu.onscroll = function () {
+            localStorage.setItem("menu-scroll-position", menu.scrollLeft);
+        }
+    }
+
+    document.querySelectorAll('a[href^="#"]').forEach(anchor => {
+        anchor.addEventListener("click", function (e) {
+            e.preventDefault();
+            var id = this.getAttribute("href").substr(1);
+            if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+                document.querySelector(`[id='${decodeURIComponent(id)}']`).scrollIntoView({
+                    behavior: "smooth"
+                });
+            } else {
+                document.querySelector(`[id='${decodeURIComponent(id)}']`).scrollIntoView();
+            }
+            if (id === "top") {
+                history.replaceState(null, null, " ");
+            } else {
+                history.pushState(null, null, `#${id}`);
+            }
+        });
+    });
+
+</script>
+<script>
+    var mybutton = document.getElementById("top-link");
+    window.onscroll = function () {
+        if (document.body.scrollTop > 800 || document.documentElement.scrollTop > 800) {
+            mybutton.style.visibility = "visible";
+            mybutton.style.opacity = "1";
+        } else {
+            mybutton.style.visibility = "hidden";
+            mybutton.style.opacity = "0";
+        }
+    };
+
+</script>
+<script>
+    document.getElementById("theme-toggle").addEventListener("click", () => {
+        const html = document.querySelector("html");
+        if (html.dataset.theme === "dark") {
+            html.dataset.theme = 'light';
+            localStorage.setItem("pref-theme", 'light');
+        } else {
+            html.dataset.theme = 'dark';
+            localStorage.setItem("pref-theme", 'dark');
+        }
+    })
+
+</script>
+</body>
+
+</html>
