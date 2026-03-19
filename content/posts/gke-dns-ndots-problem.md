@@ -1,6 +1,6 @@
 ---
 title: "The DNS Query That Wouldn't Stop: Debugging GKE's Hidden Ndots Problem"
-description: "How a misconfigured ndots setting in GKE led to cascading DNS failures, and the two ways we finally fixed it."
+description: "How a DNS ndots setting in GKE led to cascading DNS failures, and the two ways we finally fixed it."
 date: 2025-03-19T14:00:00+07:00
 draft: false
 tags:

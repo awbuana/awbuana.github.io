@@ -1,7 +1,7 @@
 ---
 title: "CPU Limits vs Memory Limits: When 'Survival' Means Different Things"
 date: 2026-03-19
-description: "I said memory limits are about survival. But what does 'survival' actually mean for stateless vs stateful workloads? The answer surprised me."
+description: "I said memory limits are about survival. But what does 'survival' actually mean for stateless vs stateful workloads?"
 tags:
   - kubernetes
   - devops
