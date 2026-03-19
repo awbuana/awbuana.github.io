@@ -9,6 +9,11 @@ tags:
   - gke
   - cost-optimization
 draft: false
+showToc: true
+categories:
+  - Kubernetes
+  - Infrastructure
+  - Engineering
 ---
 
 I thought I was being clever.

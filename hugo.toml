@@ -25,8 +25,8 @@ theme = "hugo-PaperMod"
 
 [params.homeInfoParams]
   title = "awbuana"
-  headline = "Software Engineer & Problem Solver"
-  content = "Welcome to my digital garden! I write about software development, technology trends, and lessons learned along the way."
+  headline = "Software Engineer"
+  content = "Welcome to my digital garden! I write about software development, and lessons learned along the way."
 
 [[params.socialIcons]]
   name = "github"
