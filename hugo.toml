@@ -1,7 +1,8 @@
 baseURL = "https://awbuana.github.io/"
 locale = "en-us"
-title = "awbuana"
+title = "awbuana - Software Engineer & Developer Blog"
 theme = "hugo-PaperMod"
+enableRobotsTXT = true
 
 [params]
   env = "production"
@@ -24,7 +25,7 @@ theme = "hugo-PaperMod"
     anonymizeIP = true
 
 [params.homeInfoParams]
-  title = "awbuana"
+title = "awbuana - Software Engineer & Developer Blog"
   headline = "Software Engineer"
   content = "Welcome to my digital garden! I write about software development, and lessons learned along the way."
 
@@ -46,7 +47,6 @@ theme = "hugo-PaperMod"
   showShareButtons = true
   showReadingTime = true
   showWordCount = true
-  enableRobotsTXT = true
   trustedSources = ["github.com", ".githubusercontent.com", "golang.org", "play.golang.org"]
 
 [params.PaperMod.cover]
