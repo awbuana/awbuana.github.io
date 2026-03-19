@@ -5,7 +5,7 @@
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet">
 <style>
   :root {
-    --bg-primary: #0a0a0a;
+    --bg-primary: #1d1e20;
     --bg-secondary: #141414;
     --bg-tertiary: #1a1a1a;
     --border-color: #262626;
@@ -56,6 +56,13 @@
     background: var(--bg-primary);
     color: var(--text-primary);
     line-height: 1.6;
+  }
+
+  /* Ensure consistent background across all page types */
+  body.list,
+  body.single,
+  body.page {
+    background: var(--bg-primary) !important;
   }
 
   ::selection {

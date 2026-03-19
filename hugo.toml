@@ -1,11 +1,13 @@
 baseURL = "https://awbuana.github.io/"
 locale = "en-us"
-title = "awbuana - Software Engineer & Developer Blog"
+title = "awbuana"
 theme = "hugo-PaperMod"
 enableRobotsTXT = true
 
 [params]
+  homeTitle = "awbuana - Software Engineer & Developer Blog"
   env = "production"
+  showToc = true
   description = "Personal blog of awbuana - thoughts, tutorials, and insights on software development, technology trends, and programming."
   keywords = ["blog", "technology", "programming", "tutorials", "software development"]
   author = "awbuana"
@@ -25,7 +27,7 @@ enableRobotsTXT = true
     anonymizeIP = true
 
 [params.homeInfoParams]
-title = "awbuana - Software Engineer & Developer Blog"
+  title = "awbuana"
   headline = "Software Engineer"
   content = "Welcome to my digital garden! I write about software development, and lessons learned along the way."
 
