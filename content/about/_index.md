@@ -9,7 +9,7 @@ searchHidden: true
 
 # Hello, I'm awbuana
 
-I keep a note in my phone called "things that broke today." It's surprisingly long for a Tuesday.
+I keep a note in my phone called "things that broke today."
 
 I work at a unicorn startup. The kind where you go from "we need to scale" to "why is the latency spiking" in about six months. Over time I've touched most of the stack, but I keep getting pulled back to the same problems: slow queries on billion-row tables, Kubernetes clusters that cost too much, and services that need to handle thousands of requests per second without falling over.
 
@@ -17,7 +17,7 @@ I work at a unicorn startup. The kind where you go from "we need to scale" to "w
 
 I spend a lot of time with Go. I've written services that handle serious traffic, and I've debugged enough distributed systems (and distributed problems).
 
-The cloud bill is everyone's problem now. I got into cost optimization after seeing our database spend double in three months for no good reason. Turns out you can save a lot by actually looking at what queries are running and whether you need that instance size. I've cut database costs by tuning queries, adding proper indexing, and knowing when to say "this doesn't need to be in Postgres." I've also spent time right-sizing Kubernetes clusters and figuring out why our Elasticsearch nodes were eating memory like it was free.
+The cloud bill is everyone's problem now. I got into cost optimization after seeing our database spend double in three months for no good reason. Turns out you can save a lot by actually looking at what queries are running and whether you need that instance size. I've cut database costs by tuning queries, adding proper indexing, and knowing when to say "this doesn't need to be in Postgres." I've also spent time right-sizing Kubernetes clusters.
 
 ## On-Call Lessons
 
@@ -27,7 +27,7 @@ There's always more broken than you can fix. A hundred things are technically wr
 
 ## Why Write This
 
-Honestly? I need to remember what I learned before it evaporates. But also, I spent too many nights Googling "postgresql slow query billion rows" or "postgresql hit max connection pool" and finding answers from 2014. Maybe my notes help someone else.
+Honestly? I need to remember what I learned before it evaporates. But also, I spent too many nights Googling "postgresql slow query" or "postgresql hit max connection pool" and finding answers from 2014. Maybe my notes help someone else.
 
 These are real production problems, real money saved, real services kept alive. Nothing theoretical. Just the reality of keeping systems running when the scale gets uncomfortable.
 

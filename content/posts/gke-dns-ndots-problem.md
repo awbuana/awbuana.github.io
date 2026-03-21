@@ -140,11 +140,121 @@ The caching helps, but it doesn't eliminate the root cause. The search domain ex
 
 We ended up running both solutions in parallel. FQDNs for critical internal services where we wanted guaranteed single-query resolution. NodeLocal DNSCache as a safety net to reduce the impact of any queries that do slip through.
 
+## Solution 3: Override ndots at the Deployment Level
+
+There's a third approach that doesn't require modifying application code or enabling cluster-wide features. You can override the DNS configuration directly in your Kubernetes deployments.
+
+### The Quick Fix
+
+Add a `dnsConfig` section to your pod spec:
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: my-service
+spec:
+  template:
+    spec:
+      dnsConfig:
+        options:
+          - name: ndots
+            value: "1"
+      containers:
+        - name: my-service
+          image: my-service:latest
+```
+
+With `ndots:1`, any hostname with at least one dot is considered fully qualified. This means `api.partner.com` gets resolved immediately without triggering the search domain cascade. Only single-label names like `api-service` (zero dots) will attempt search domain expansion.
+
+Here's what the pod's `/etc/resolv.conf` looks like after this change:
+
+```
+nameserver 10.0.0.10
+search default.svc.cluster.local svc.cluster.local cluster.local google.internal
+options ndots:1
+```
+
+Same search domains, but now the resolver is much less aggressive about using them.
+
+### Standardizing with Helm
+
+If you're running multiple services, you don't want to copy-paste this configuration into every deployment. A Helm chart template solves this elegantly.
+
+Create a reusable template in your Helm chart:
+
+```yaml
+# templates/_helpers.tpl
+{{/* Define standard DNS config */}}
+{{- define "mychart.dnsConfig" -}}
+dnsConfig:
+  options:
+    - name: ndots
+      value: {{ .Values.dns.ndots | default "1" | quote }}
+{{- end -}}
+```
+
+Reference it in your deployment template:
+
+```yaml
+# templates/deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "mychart.fullname" . }}
+  labels:
+    {{- include "mychart.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "mychart.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "mychart.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- include "mychart.dnsConfig" . | nindent 6 }}
+      containers:
+        - name: {{ .Chart.Name }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+```
+
+With default values in `values.yaml`:
+
+```yaml
+# values.yaml
+dns:
+  ndots: "1"
+```
+
+Now every deployment using this chart automatically gets the optimized DNS configuration. If a specific service needs different behavior, you can override it at deploy time:
+
+```bash
+helm upgrade my-service ./mychart --set dns.ndots=2
+```
+
+### The Trade-offs
+
+Setting `ndots:1` isn't free. You need to understand what you're changing:
+
+**Works great for:** External services with dots in their names (`api.partner.com`, `db.postgres.svc.cluster.local`). These resolve immediately without search domain expansion.
+
+**Requires attention for:** Internal single-label service names. If you reference `api-service` (without namespace), it will try to resolve as-is first. If that fails, it will still fall through the search domains. But since most internal services include at least one dot in their FQDN anyway, this rarely causes issues.
+
+**Doesn't help with:** The fundamental problem of `google.internal` being in the search path. That fourth search domain still exists in `/etc/resolv.conf` - we've only reduced how often we hit it.
+
+Here's the critical point: **this problem only occurs if you use unqualified, single-label service names.** If someone references just `api-service` (zero dots) instead of `api-service.default.svc.cluster.local`, the resolver will still append all search domains including `google.internal`. The metadata server at `169.254.169.254` still gets hammered whenever those unqualified lookups occur.
+
+With `ndots:1`, any hostname containing at least one dot bypasses the search domains entirely. The issue is completely avoided for external APIs (`api.partner.com`), database endpoints (`postgres.database.svc.cluster.local`), or any other dotted hostname. But for bare service names without dots, the problematic search domain cascade still happens. This is why combining `ndots:1` with FQDNs for internal services gives the best protection.
+
+The Helm approach gives you consistency across all deployments. Every pod gets the same DNS behavior, which makes debugging easier and prevents surprises when one service has different resolution behavior than another.
+
 ## What I Learned
 
 Three days of my life I'll never get back, but I learned some things:
 
-**Defaults are dangerous.** GKE's default `ndots:5` with that `google.internal` search domain makes sense for Google's infrastructure. It makes zero sense for most workloads running on GKE. But it's the default, so nobody questions it until it breaks.
+**Defaults are dangerous.** GKE's default `ndots:5` with that `google.internal` search domain makes sense for Google's infrastructure.
 
 **DNS is "solved" until it isn't.** We treat DNS like plumbing - it's just supposed to work. But Kubernetes DNS is complex. You've got CoreDNS, kube-dns, node-local caches, host resolver configurations, and cloud provider metadata servers all interacting. When it breaks, it breaks in ways that look like "network issues" but are actually configuration problems.
 
@@ -157,5 +267,3 @@ Three days of my life I'll never get back, but I learned some things:
 I won't say I'm grateful for the experience. But I am glad I now know to check `ndots` and search domains whenever I see "mysterious" network timeouts in a Kubernetes cluster.
 
 If you're running on GKE, go check your `/etc/resolv.conf` right now. Look at that ndots value. Consider whether you really need five search domains. And maybe - just maybe - start using FQDNs for your internal services before you end up spending three days debugging DNS like I did.
-
-The metadata server will thank you. Your SRE team will thank you. Future you, troubleshooting a completely different issue at 2am, will definitely thank you.
