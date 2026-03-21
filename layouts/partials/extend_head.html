@@ -2,7 +2,9 @@
 {{ partial "seo.html" . }}
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
   :root {
     --bg-primary: #1d1e20;
@@ -475,6 +477,325 @@
       font-size: 1.25rem;
     }
   }
+
+  /* Typography Update */
+  --font-heading: 'Space Grotesk', sans-serif;
+  --font-mono: 'DM Mono', monospace;
+
+  h1, h2, h3, h4, h5, h6 {
+    font-family: var(--font-heading);
+    font-weight: 600;
+  }
+
+  .post-title {
+    font-family: var(--font-heading);
+    font-weight: 700;
+  }
+
+  /* Single Post Layout with TOC Outside */
+  .single-wrapper {
+    display: grid;
+    grid-template-columns: 160px minmax(600px, 800px) 220px;
+    gap: 2.5rem;
+    max-width: 1280px;
+    margin: 0 auto;
+    padding: 0 2rem;
+    position: relative;
+    justify-content: center;
+  }
+
+  .post-single {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .toc-outer-sidebar {
+    min-width: 240px;
+  }
+
+  /* Left Metadata Sidebar */
+  .post-meta-sidebar {
+    position: relative;
+  }
+
+  .post-meta-sidebar .meta-section {
+    margin-bottom: 1.5rem;
+    padding-bottom: 1.5rem;
+    border-bottom: 1px solid var(--border-color);
+  }
+
+  .post-meta-sidebar .meta-section:last-of-type {
+    border-bottom: none;
+  }
+
+  .post-meta-sidebar .meta-label {
+    display: block;
+    font-size: 0.65rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.15em;
+    color: var(--text-muted);
+    margin-bottom: 0.5rem;
+  }
+
+  .post-meta-sidebar .meta-value {
+    display: block;
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+    line-height: 1.4;
+  }
+
+  .post-meta-sidebar .meta-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+  }
+
+  .post-meta-sidebar .meta-tag {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    padding: 0.2rem 0.6rem;
+    border: 1px solid var(--border-color);
+    border-radius: 2px;
+    transition: all 0.2s ease;
+  }
+
+  .post-meta-sidebar .meta-tag:hover {
+    border-color: var(--text-secondary);
+    color: var(--text-primary);
+  }
+
+  .post-meta-sidebar .meta-share {
+    display: flex;
+    gap: 0.75rem;
+  }
+
+  .post-meta-sidebar .share-link {
+    color: var(--text-secondary);
+    transition: color 0.2s ease;
+    background: none;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+  }
+
+  .post-meta-sidebar .share-link:hover {
+    color: var(--text-primary);
+  }
+
+  /* TOC Outer Sidebar */
+  .toc-outer-sidebar {
+    position: relative;
+  }
+
+  .toc-nav {
+    position: sticky;
+    top: 100px;
+    max-height: calc(100vh - 140px);
+    overflow-y: auto;
+    padding-left: 1.5rem;
+    border-left: 2px solid var(--border-color);
+  }
+
+  .toc-header {
+    margin-bottom: 1.5rem;
+    padding-bottom: 1rem;
+    border-bottom: 1px solid var(--border-color);
+  }
+
+  .toc-title {
+    font-family: var(--font-heading);
+    font-size: 0.7rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.15em;
+    color: var(--text-muted);
+  }
+
+  .toc-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+  }
+
+  .toc-item {
+    position: relative;
+    margin: 0;
+  }
+
+  .toc-link {
+    display: block;
+    padding: 0.5rem 0;
+    font-size: 0.85rem;
+    line-height: 1.4;
+    color: var(--text-secondary);
+    text-decoration: none;
+    transition: all 0.2s ease;
+    position: relative;
+  }
+
+  .toc-link::before {
+    content: '';
+    position: absolute;
+    left: -1.5rem;
+    top: 0;
+    bottom: 0;
+    width: 2px;
+    background: transparent;
+    transition: background 0.2s ease;
+  }
+
+  .toc-link:hover {
+    color: var(--text-primary);
+  }
+
+  /* Active Section Highlighting */
+  .toc-link.active {
+    color: var(--text-primary);
+    font-weight: 600;
+  }
+
+  .toc-link.active::before {
+    background: var(--text-primary);
+  }
+  
+  /* Improve active visibility with subtle background */
+  .toc-link.active {
+    position: relative;
+  }
+  
+  .toc-link.active::after {
+    content: '';
+    position: absolute;
+    left: -1.5rem;
+    right: -0.5rem;
+    top: 0;
+    bottom: 0;
+    background: linear-gradient(90deg, rgba(128, 128, 128, 0.08) 0%, transparent 100%);
+    pointer-events: none;
+    z-index: -1;
+  }
+
+  /* Indentation based on heading level */
+  .toc-level-1 { margin-left: 0; }
+  .toc-level-2 { margin-left: 0; }
+  .toc-level-3 { margin-left: 0.75rem; }
+  .toc-level-4 { margin-left: 1.5rem; }
+  .toc-level-5 { margin-left: 2.25rem; }
+  .toc-level-6 { margin-left: 3rem; }
+
+  .toc-level-3 .toc-link,
+  .toc-level-4 .toc-link,
+  .toc-level-5 .toc-link,
+  .toc-level-6 .toc-link {
+    font-size: 0.8rem;
+  }
+
+  /* Sticky left sidebar */
+  .post-meta-sidebar {
+    position: sticky;
+    top: 100px;
+    height: fit-content;
+    max-height: calc(100vh - 140px);
+    overflow-y: auto;
+  }
+
+  /* Mobile: Hide sidebars */
+  @media (max-width: 1200px) {
+    .single-wrapper {
+      grid-template-columns: 1fr;
+      gap: 2rem;
+      padding: 0 1.5rem;
+    }
+
+    .toc-outer-sidebar,
+    .post-meta-sidebar {
+      display: none;
+    }
+
+    .post-single {
+      max-width: 100%;
+    }
+  }
+
+  /* Tablet: Hide left sidebar, keep TOC */
+  @media (max-width: 1400px) and (min-width: 1201px) {
+    .single-wrapper {
+      grid-template-columns: 1fr 240px;
+    }
+
+    .post-meta-sidebar {
+      display: none;
+    }
+  }
 </style>
+
+<script>
+  // Active section highlighting with IntersectionObserver
+  document.addEventListener('DOMContentLoaded', function() {
+    const tocLinks = document.querySelectorAll('.toc-link');
+    if (tocLinks.length === 0) return;
+
+    const headings = [];
+    tocLinks.forEach(link => {
+      const id = link.getAttribute('data-section');
+      const heading = document.getElementById(id);
+      if (heading) {
+        headings.push({ id, element: heading, link });
+      }
+    });
+
+    if (headings.length === 0) return;
+
+    // Set initial active state
+    tocLinks.forEach(link => link.classList.remove('active'));
+
+    const observerOptions = {
+      root: null,
+      rootMargin: '0px 0px -85% 0px',
+      threshold: 0
+    };
+
+    let visibleSections = [];
+
+    const observer = new IntersectionObserver((entries) => {
+      entries.forEach(entry => {
+        const id = entry.target.id;
+        const link = document.querySelector(`.toc-link[data-section="${id}"]`);
+        if (link) {
+          if (entry.isIntersecting) {
+            visibleSections.push({ id, level: parseInt(entry.target.tagName.charAt(1)) });
+          } else {
+            visibleSections = visibleSections.filter(s => s.id !== id);
+          }
+        }
+      });
+
+      // Highlight the deepest (most specific) visible section
+      if (visibleSections.length > 0) {
+        visibleSections.sort((a, b) => b.level - a.level);
+        const deepest = visibleSections[0];
+        tocLinks.forEach(l => l.classList.remove('active'));
+        const activeLink = document.querySelector(`.toc-link[data-section="${deepest.id}"]`);
+        if (activeLink) activeLink.classList.add('active');
+      }
+    }, observerOptions);
+
+    headings.forEach(h => observer.observe(h.element));
+
+    // Smooth scroll for TOC links
+    tocLinks.forEach(link => {
+      link.addEventListener('click', function(e) {
+        e.preventDefault();
+        const id = this.getAttribute('data-section');
+        const target = document.getElementById(id);
+        if (target) {
+          target.scrollIntoView({ behavior: 'smooth' });
+          history.pushState(null, null, '#' + id);
+        }
+      });
+    });
+  });
+</script>
 
 <!-- Cloudflare Web Analytics --><script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "111598f3c6224e77b71e9793bf270629"}'></script><!-- End Cloudflare Web Analytics -->

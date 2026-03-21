@@ -1,0 +1,32 @@
+{{- $headers := findRE "<h[1-6].*?>(.|\n])+?</h[1-6]>" .Content -}}
+{{- $has_headers := ge (len $headers) 1 -}}
+{{- if $has_headers -}}
+  {{- $largest := 6 -}}
+  {{- range $headers -}}
+    {{- $headerLevel := index (findRE "[1-6]" . 1) 0 -}}
+    {{- $headerLevel := len (seq $headerLevel) -}}
+    {{- if lt $headerLevel $largest -}}
+      {{- $largest = $headerLevel -}}
+    {{- end -}}
+  {{- end -}}
+
+  {{- $firstHeaderLevel := len (seq (index (findRE "[1-6]" (index $headers 0) 1) 0)) -}}
+
+  <ul class="toc-list">
+    {{- range $i, $header := $headers -}}
+      {{- $headerLevel := index (findRE "[1-6]" . 1) 0 -}}
+      {{- $headerLevel := len (seq $headerLevel) -}}
+
+      {{- $id := index (findRE "(id=\"(.*?)\")" $header 9) 0 }}
+      {{- $cleanedID := replace (replace $id "id=\"" "") "\"" "" }}
+      {{- $headerText := replaceRE "<h[1-6].*?>((.|\n])+?)</h[1-6]>" "$1" $header -}}
+      {{- $levelClass := printf "toc-level-%d" $headerLevel }}
+
+      <li class="toc-item {{ $levelClass }}">
+        <a href="#{{- $cleanedID -}}" class="toc-link" data-section="{{- $cleanedID -}}">
+          {{- $headerText | plainify | safeHTML -}}
+        </a>
+      </li>
+    {{- end -}}
+  </ul>
+{{- end -}}
