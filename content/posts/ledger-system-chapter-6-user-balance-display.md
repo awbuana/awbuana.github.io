@@ -1,6 +1,6 @@
 ---
 title: "Building a Ledger System - Chapter 6: Displaying Balance and Mutations to Users"
-date: 2026-03-23
+date: 2026-03-21
 description: "How to build fast, scalable APIs for showing account balances and transaction history to end users. Covers data modeling, query optimization, and caching strategies."
 tags:
   - fintech

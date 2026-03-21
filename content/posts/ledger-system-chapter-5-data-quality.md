@@ -1,6 +1,6 @@
 ---
 title: "Building a Ledger System - Chapter 5: Data Quality & Best Practices"
-date: 2026-03-22
+date: 2026-03-21
 description: "Part 5 of 5: Continuous data quality checks, holding accounts for unsettled funds, and production best practices."
 tags:
   - fintech
