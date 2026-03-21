@@ -1,5 +1,5 @@
 ---
-title: "Why Your Pod Died: The Brutal Difference Between CPU and Memory Limits"
+title: "Why Your Pod Died (OOMKilled): The Difference Between CPU and Memory Limits"
 date: 2026-03-19
 description: "CPU throttles. Memory kills. Understanding this fundamental difference will save you from 3 AM pages."
 tags:
