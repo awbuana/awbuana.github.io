@@ -48,6 +48,17 @@
       </div>
     </div>
     {{- end }}
+    {{- $tags := .Language.Params.Taxonomies.tag | default "tags" }}
+    {{- with $.GetTerms $tags }}
+    <div class="meta-section">
+      <span class="meta-label">Tags:</span>
+      <div class="meta-tags">
+        {{- range . }}
+        <a href="{{ .Permalink }}" class="meta-tag">{{ .LinkTitle }}</a>
+        {{- end }}
+      </div>
+    </div>
+    {{- end }}
     <div class="meta-section">
       <span class="meta-label">Share:</span>
       <div class="meta-share">
@@ -76,12 +87,6 @@
     {{- end }}
 
     <footer class="post-footer">
-      {{- $tags := .Language.Params.Taxonomies.tag | default "tags" }}
-      <ul class="post-tags">
-        {{- range ($.GetTerms $tags) }}
-        <li><a href="{{ .Permalink }}">{{ .LinkTitle }}</a></li>
-        {{- end }}
-      </ul>
       {{- if (.Param "ShowPostNavLinks") }}
       {{- partial "post_nav_links.html" . }}
       {{- end }}

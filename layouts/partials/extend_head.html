@@ -604,11 +604,10 @@
   }
 
   .toc-title {
-    font-family: var(--font-heading);
     font-size: 0.7rem;
-    font-weight: 700;
+    font-weight: 600;
     text-transform: uppercase;
-    letter-spacing: 0.15em;
+    letter-spacing: 0.1em;
     color: var(--text-muted);
   }
 
@@ -862,6 +861,13 @@
     border-radius: 2px;
     text-transform: uppercase;
     letter-spacing: 0.05em;
+    text-decoration: none;
+    transition: all 0.2s ease;
+  }
+
+  .single-wrapper.stripe-layout .meta-tag:hover {
+    border-color: var(--text-secondary);
+    color: var(--text-primary);
   }
 
   .single-wrapper.stripe-layout .meta-share {
