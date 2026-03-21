@@ -1,0 +1,28 @@
+<script
+  type="application/javascript"
+  src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"
+></script>
+<script>
+  var config = {
+    startOnLoad: true,
+    theme:'{{ if site.Params.mermaid.theme }}{{ site.Params.mermaid.theme }}{{ else }}dark{{ end }}',
+    align:'{{ if site.Params.mermaid.align }}{{ site.Params.mermaid.align }}{{ else }}center{{ end }}',
+  };
+  mermaid.initialize(config);
+  
+  // Convert code blocks with language "mermaid" to mermaid divs
+  document.addEventListener('DOMContentLoaded', function() {
+    var codeBlocks = document.querySelectorAll('pre code.language-mermaid');
+    codeBlocks.forEach(function(codeBlock) {
+      var pre = codeBlock.parentElement;
+      var mermaidDiv = document.createElement('div');
+      mermaidDiv.className = 'mermaid';
+      mermaidDiv.textContent = codeBlock.textContent;
+      pre.parentElement.replaceChild(mermaidDiv, pre);
+    });
+    // Re-run mermaid to render the new divs
+    if (typeof mermaid !== 'undefined') {
+      mermaid.init(undefined, '.mermaid');
+    }
+  });
+</script>

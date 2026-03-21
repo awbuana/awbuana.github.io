@@ -10,6 +10,7 @@ tags:
 series:
   name: "Building a Ledger System"
   order: 2
+mermaid: true
 ---
 
 This is the second chapter in our five-part series on building production-ready ledger systems. In [Chapter 1](/posts/ledger-system-chapter-1-foundations), we covered double-entry bookkeeping, data modeling, and transaction validation. Now we'll explore transaction state management and async processing.

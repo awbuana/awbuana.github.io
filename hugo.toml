@@ -74,6 +74,10 @@ enableRobotsTXT = true
   email = ""
   rss = true
 
+[params.mermaid]
+  theme = "dark"
+  align = "center"
+
 [menu]
   [[menu.main]]
     identifier = "posts"

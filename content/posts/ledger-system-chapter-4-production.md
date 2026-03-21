@@ -10,6 +10,7 @@ tags:
 series:
   name: "Building a Ledger System"
   order: 4
+mermaid: true
 ---
 
 This is the fourth chapter in our five-part series on building production-ready ledger systems. In [Chapter 3](/posts/ledger-system-chapter-3-advanced), we covered multi-currency handling, reconciliation, and database locking. Now we'll focus on production operations: audit trails, balance snapshots, and settlement tracking.

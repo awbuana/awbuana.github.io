@@ -85,6 +85,9 @@
       {{- else }}{{ .Content }}{{ end }}
     </div>
     {{- end }}
+    {{- if (.Params.mermaid) }}
+    {{ partial "mermaid.html" . }}
+    {{- end }}
 
     <footer class="post-footer">
       {{- if (.Param "ShowPostNavLinks") }}

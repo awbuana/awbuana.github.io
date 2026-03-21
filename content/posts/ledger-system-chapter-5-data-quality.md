@@ -10,6 +10,7 @@ tags:
 series:
   name: "Building a Ledger System"
   order: 5
+mermaid: true
 ---
 
 This is the final chapter in our five-part series on building production-ready ledger systems. In the previous chapters, we covered foundations, transaction lifecycles, advanced topics, and production operations. Now we'll focus on keeping your ledger healthy with continuous data quality checks and handling unsettled funds with holding accounts.

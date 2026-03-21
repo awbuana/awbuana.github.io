@@ -10,6 +10,7 @@ tags:
 series:
   name: "Building a Ledger System"
   order: 1
+mermaid: true
 ---
 
 I stared at the whiteboard for a solid ten minutes.

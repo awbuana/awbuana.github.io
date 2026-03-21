@@ -10,6 +10,7 @@ tags:
 series:
   name: "Building a Ledger System"
   order: 3
+mermaid: true
 ---
 
 This is the third chapter in our five-part series on building production-ready ledger systems. In [Chapter 2](/posts/ledger-system-chapter-2-lifecycle), we covered transaction state management and async processing. Now we'll explore advanced topics: multi-currency support, reconciliation systems, and preventing race conditions.
