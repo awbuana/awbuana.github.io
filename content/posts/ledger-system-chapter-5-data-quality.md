@@ -1735,10 +1735,11 @@ And honestly? That's the highest praise I can give.
 
 ---
 
-**Series Complete**
+**Series Navigation:**
 
 - [Chapter 1: Foundations](/posts/ledger-system-chapter-1-foundations)
 - [Chapter 2: Transaction Lifecycle](/posts/ledger-system-chapter-2-lifecycle)
 - [Chapter 3: Advanced Topics](/posts/ledger-system-chapter-3-advanced)
 - [Chapter 4: Production Operations](/posts/ledger-system-chapter-4-production)
 - Chapter 5: Data Quality & Best Practices (You are here)
+- [Chapter 6: Displaying Balance and Mutations to Users](/posts/ledger-system-chapter-6-user-balance-display)
