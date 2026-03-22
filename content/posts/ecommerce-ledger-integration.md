@@ -994,6 +994,14 @@ I ran this in production for two years. Here's what I learned the hard way:
 
 Don't capture on purchase. Capture when the item ships. This is the mistake everyone makes. If you capture early, you're stuck holding the bag when customers refund before they even receive the product.
 
+**Why this matters:**
+
+Imagine a customer pays Monday morning, but the item doesn't ship until Friday afternoon. If you capture immediately on Monday, Stripe charges you a 2.9% + 30¢ fee. If the customer cancels Tuesday afternoon—before the item even leaves the warehouse—you have to issue a full refund. Stripe doesn't refund their fees. You just lost $3.20 on a transaction that never happened.
+
+At 10,000 orders per month with a 5% cancellation rate, that's 500 cancelled orders. Early capture costs you $1,600 per month in unrecoverable Stripe fees. Ship-then-capture costs you zero.
+
+From an accounting perspective, capturing early also creates messy ledger entries—you're recognizing revenue, then immediately reversing it, plus eating the processing fee. Ship-then-capture is cleaner: no revenue recognition until the item actually ships, and cancelled orders never hit your ledger at all.
+
 Track every cent. That thirty cent Stripe fee? Track it. That two cent rounding difference? Track it. At scale, pennies become thousands of dollars.
 
 Reconcile daily. Compare your ledger to Stripe's reports every single day. Small discrepancies become big problems if you let them fester.
