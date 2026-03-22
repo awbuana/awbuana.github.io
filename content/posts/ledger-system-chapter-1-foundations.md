@@ -13,7 +13,7 @@ series:
 mermaid: true
 ---
 
-I stared at the whiteboard for a solid ten minutes.
+I stood there for a solid ten minutes, marker in hand, not knowing where to start.
 
 My team needed to track money movement. Not just record transactions—we needed to validate them, reconcile them, and prove they actually happened the way we said they did. And if we got it wrong? Well, that's the kind of mistake that keeps people up at night.
 
