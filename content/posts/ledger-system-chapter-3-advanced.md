@@ -92,740 +92,954 @@ Reconciliation catches:
 
 Run it daily. Automate the easy matches (exact amount + timestamp within seconds). Flag the rest for human review.
 
-### Real-World Rails Implementation
+### Real-World Implementation
 
 Here's a complete reconciliation system for a payment processor integrating with Stripe.
 
 #### Step 1: Database Schema for Reconciliation
 
-```ruby
-# db/migrate/xxx_create_reconciliation_tables.rb
-class CreateReconciliationTables < ActiveRecord::Migration[7.0]
-  def change
-    # External transactions from payment processors, banks, etc.
-    create_table :external_transactions do |t|
-      t.string :source_system, null: false  # 'stripe', 'bank_of_america', etc.
-      t.string :external_id, null: false    # ID from external system
-      t.string :transaction_type            # 'charge', 'refund', 'transfer'
-      t.decimal :amount, precision: 19, scale: 4
-      t.string :currency
-      t.string :status                      # 'pending', 'completed', 'failed'
-      t.datetime :occurred_at
-      t.jsonb :raw_data                     # Full payload from external system
-      t.timestamps
-      
-      t.index [:source_system, :external_id], unique: true
-      t.index [:source_system, :status, :occurred_at]
-    end
+**Table: external_transactions**
+```sql
+CREATE TABLE external_transactions (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    source_system VARCHAR(255) NOT NULL,  -- 'stripe', 'bank_of_america', etc.
+    external_id VARCHAR(255) NOT NULL,    -- ID from external system
+    transaction_type VARCHAR(255),        -- 'charge', 'refund', 'transfer'
+    amount DECIMAL(19, 4),
+    currency VARCHAR(10),
+    status VARCHAR(50),                   -- 'pending', 'completed', 'failed'
+    occurred_at TIMESTAMP,
+    raw_data JSON,                        -- Full payload from external system
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     
-    # Links between internal and external transactions
-    create_table :reconciliation_matches do |t|
-      t.references :ledger_transaction, null: false, foreign_key: true
-      t.references :external_transaction, null: false, foreign_key: true
-      t.string :match_type                  # 'exact', 'partial', 'manual'
-      t.decimal :matched_amount
-      t.string :status                      # 'matched', 'discrepancy', 'unmatched'
-      t.text :notes
-      t.bigint :matched_by_id               # User who approved manual match
-      t.timestamps
-      
-      t.index [:ledger_transaction_id, :external_transaction_id], 
-              unique: true, 
-              name: 'idx_unique_match'
-    end
-    
-    # Reconciliation runs (daily batches)
-    create_table :reconciliation_runs do |t|
-      t.string :source_system, null: false
-      t.date :date, null: false
-      t.datetime :started_at
-      t.datetime :completed_at
-      t.integer :total_external_count
-      t.integer :total_internal_count
-      t.integer :auto_matched_count
-      t.integer :manual_review_count
-      t.integer :discrepancy_count
-      t.decimal :internal_total
-      t.decimal :external_total
-      t.string :status                      # 'running', 'completed', 'failed'
-      t.text :error_message
-      t.timestamps
-      
-      t.index [:source_system, :date], unique: true
-    end
-    
-    # Discrepancies requiring investigation
-    create_table :reconciliation_discrepancies do |t|
-      t.references :reconciliation_run, null: false, foreign_key: true
-      t.references :ledger_transaction, foreign_key: true
-      t.references :external_transaction, foreign_key: true
-      t.string :discrepancy_type            # 'amount_mismatch', 'missing_internal', 
-                                            # 'missing_external', 'duplicate'
-      t.decimal :internal_amount
-      t.decimal :external_amount
-      t.string :status                      # 'open', 'investigating', 'resolved', 'ignored'
-      t.text :description
-      t.text :resolution_notes
-      t.bigint :resolved_by_id
-      t.datetime :resolved_at
-      t.timestamps
-      
-      t.index [:status, :created_at]
-      t.index :reconciliation_run_id
-    end
-    
-    # Add reconciliation tracking to existing tables
-    add_column :ledger_transactions, :reconciliation_status, :string, default: 'unreconciled'
-    add_column :ledger_transactions, :reconciled_at, :datetime
-    add_index :ledger_transactions, [:reconciliation_status, :posted_at]
-  end
-end
+    UNIQUE KEY unique_external (source_system, external_id),
+    INDEX idx_source_status_date (source_system, status, occurred_at)
+);
 ```
 
-#### Step 2: Models
+**Table: reconciliation_matches**
+```sql
+CREATE TABLE reconciliation_matches (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    ledger_transaction_id BIGINT NOT NULL,
+    external_transaction_id BIGINT NOT NULL,
+    match_type VARCHAR(50),               -- 'exact', 'partial', 'manual'
+    matched_amount DECIMAL(19, 4),
+    status VARCHAR(50),                   -- 'matched', 'discrepancy', 'unmatched'
+    notes TEXT,
+    matched_by_id BIGINT,                 -- User who approved manual match
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    
+    FOREIGN KEY (ledger_transaction_id) REFERENCES ledger_transactions(id),
+    FOREIGN KEY (external_transaction_id) REFERENCES external_transactions(id),
+    UNIQUE KEY unique_match (ledger_transaction_id, external_transaction_id)
+);
+```
 
-```ruby
-# app/models/external_transaction.rb
-class ExternalTransaction < ApplicationRecord
-  has_one :reconciliation_match
-  has_one :ledger_transaction, through: :reconciliation_match
-  has_one :reconciliation_discrepancy
-  
-  validates :source_system, presence: true
-  validates :external_id, presence: true, uniqueness: { scope: :source_system }
-  validates :amount, numericality: { other_than: 0 }
-  
-  enum status: {
-    pending: 'pending',
-    completed: 'completed',
-    failed: 'failed',
-    refunded: 'refunded'
-  }
-  
-  scope :unmatched, -> { left_outer_joins(:reconciliation_match).where(reconciliation_matches: { id: nil }) }
-  scope :for_date_range, ->(start_date, end_date) { where(occurred_at: start_date.beginning_of_day..end_date.end_of_day) }
-  
-  def matched?
-    reconciliation_match.present?
-  end
-end
+**Table: reconciliation_runs**
+```sql
+CREATE TABLE reconciliation_runs (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    source_system VARCHAR(255) NOT NULL,
+    date DATE NOT NULL,
+    started_at TIMESTAMP,
+    completed_at TIMESTAMP,
+    total_external_count INTEGER,
+    total_internal_count INTEGER,
+    auto_matched_count INTEGER,
+    manual_review_count INTEGER,
+    discrepancy_count INTEGER,
+    internal_total DECIMAL(19, 4),
+    external_total DECIMAL(19, 4),
+    status VARCHAR(50),                   -- 'running', 'completed', 'failed'
+    error_message TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    
+    UNIQUE KEY unique_run (source_system, date)
+);
+```
 
-# app/models/reconciliation_match.rb
-class ReconciliationMatch < ApplicationRecord
-  belongs_to :ledger_transaction
-  belongs_to :external_transaction
-  belongs_to :matched_by, class_name: 'User', optional: true
-  
-  validates :match_type, inclusion: { in: %w[exact partial manual] }
-  validates :status, inclusion: { in: %w[matched discrepancy unmatched] }
-  
-  enum match_type: {
-    exact: 'exact',
-    partial: 'partial',
-    manual: 'manual'
-  }
-end
+**Table: reconciliation_discrepancies**
+```sql
+CREATE TABLE reconciliation_discrepancies (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    reconciliation_run_id BIGINT NOT NULL,
+    ledger_transaction_id BIGINT,
+    external_transaction_id BIGINT,
+    discrepancy_type VARCHAR(255),        -- 'amount_mismatch', 'missing_internal', 
+                                          -- 'missing_external', 'duplicate'
+    internal_amount DECIMAL(19, 4),
+    external_amount DECIMAL(19, 4),
+    status VARCHAR(50),                   -- 'open', 'investigating', 'resolved', 'ignored'
+    description TEXT,
+    resolution_notes TEXT,
+    resolved_by_id BIGINT,
+    resolved_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    
+    FOREIGN KEY (reconciliation_run_id) REFERENCES reconciliation_runs(id),
+    FOREIGN KEY (ledger_transaction_id) REFERENCES ledger_transactions(id),
+    FOREIGN KEY (external_transaction_id) REFERENCES external_transactions(id),
+    INDEX idx_status_date (status, created_at),
+    INDEX idx_run (reconciliation_run_id)
+);
+```
 
-# app/models/reconciliation_run.rb
-class ReconciliationRun < ApplicationRecord
-  has_many :reconciliation_discrepancies
-  
-  validates :source_system, presence: true
-  validates :date, presence: true
-  validates :status, inclusion: { in: %w[running completed failed] }
-  
-  def duration
-    return nil unless completed_at && started_at
-    completed_at - started_at
-  end
-  
-  def success?
-    status == 'completed' && discrepancy_count == 0
-  end
-end
+**Add columns to existing ledger_transactions table:**
+```sql
+ALTER TABLE ledger_transactions 
+ADD COLUMN reconciliation_status VARCHAR(50) DEFAULT 'unreconciled',
+ADD COLUMN reconciled_at TIMESTAMP,
+ADD INDEX idx_recon_status (reconciliation_status, posted_at);
+```
 
-# app/models/reconciliation_discrepancy.rb
-class ReconciliationDiscrepancy < ApplicationRecord
-  belongs_to :reconciliation_run
-  belongs_to :ledger_transaction, optional: true
-  belongs_to :external_transaction, optional: true
-  belongs_to :resolved_by, class_name: 'User', optional: true
-  
-  validates :discrepancy_type, inclusion: { in: %w[amount_mismatch missing_internal missing_external duplicate timing_mismatch] }
-  validates :status, inclusion: { in: %w[open investigating resolved ignored] }
-  
-  enum status: {
-    open: 'open',
-    investigating: 'investigating',
-    resolved: 'resolved',
-    ignored: 'ignored'
-  }
-  
-  scope :open_discrepancies, -> { where(status: %w[open investigating]) }
-  
-  def amount_difference
-    return nil unless internal_amount && external_amount
-    (internal_amount - external_amount).abs
-  end
-end
+#### Step 2: Data Models
+
+```pseudocode
+// External Transaction Model
+class ExternalTransaction
+    properties:
+        source_system: String (required)
+        external_id: String (required)
+        transaction_type: String
+        amount: Decimal (required, non-zero)
+        currency: String
+        status: Enum ['pending', 'completed', 'failed', 'refunded']
+        occurred_at: Timestamp
+        raw_data: JSON
+        created_at: Timestamp
+        updated_at: Timestamp
+    
+    relationships:
+        has_one: ReconciliationMatch
+        has_one: LedgerTransaction (via reconciliation_match)
+        has_one: ReconciliationDiscrepancy
+    
+    validations:
+        source_system must be present
+        external_id must be unique per source_system
+        amount must be non-zero
+    
+    functions:
+        isMatched(): Boolean
+            return reconciliation_match is not null
+        
+        getUnmatchedTransactions(): Array
+            return query all external_transactions 
+                   left join reconciliation_matches
+                   where reconciliation_matches.id is null
+        
+        getForDateRange(startDate, endDate): Array
+            return query where occurred_at between startDate and endDate
+```
+
+```pseudocode
+// Reconciliation Match Model
+class ReconciliationMatch
+    properties:
+        ledger_transaction_id: BigInt (required)
+        external_transaction_id: BigInt (required)
+        match_type: Enum ['exact', 'partial', 'manual']
+        matched_amount: Decimal
+        status: Enum ['matched', 'discrepancy', 'unmatched']
+        notes: Text
+        matched_by_id: BigInt (optional)
+        created_at: Timestamp
+        updated_at: Timestamp
+    
+    relationships:
+        belongs_to: LedgerTransaction
+        belongs_to: ExternalTransaction
+        belongs_to: MatchedBy (User, optional)
+    
+    validations:
+        match_type must be one of: exact, partial, manual
+        status must be one of: matched, discrepancy, unmatched
+```
+
+```pseudocode
+// Reconciliation Run Model
+class ReconciliationRun
+    properties:
+        source_system: String (required)
+        date: Date (required)
+        started_at: Timestamp
+        completed_at: Timestamp
+        total_external_count: Integer
+        total_internal_count: Integer
+        auto_matched_count: Integer
+        manual_review_count: Integer
+        discrepancy_count: Integer
+        internal_total: Decimal
+        external_total: Decimal
+        status: Enum ['running', 'completed', 'failed']
+        error_message: Text
+        created_at: Timestamp
+        updated_at: Timestamp
+    
+    relationships:
+        has_many: ReconciliationDiscrepancies
+    
+    validations:
+        source_system must be present
+        date must be present
+        status must be one of: running, completed, failed
+    
+    functions:
+        getDuration(): Duration or null
+            if completed_at and started_at exist
+                return completed_at - started_at
+            return null
+        
+        isSuccess(): Boolean
+            return status == 'completed' AND discrepancy_count == 0
+```
+
+```pseudocode
+// Reconciliation Discrepancy Model
+class ReconciliationDiscrepancy
+    properties:
+        reconciliation_run_id: BigInt (required)
+        ledger_transaction_id: BigInt (optional)
+        external_transaction_id: BigInt (optional)
+        discrepancy_type: Enum ['amount_mismatch', 'missing_internal', 
+                               'missing_external', 'duplicate', 'timing_mismatch']
+        internal_amount: Decimal
+        external_amount: Decimal
+        status: Enum ['open', 'investigating', 'resolved', 'ignored']
+        description: Text
+        resolution_notes: Text
+        resolved_by_id: BigInt
+        resolved_at: Timestamp
+        created_at: Timestamp
+        updated_at: Timestamp
+    
+    relationships:
+        belongs_to: ReconciliationRun
+        belongs_to: LedgerTransaction (optional)
+        belongs_to: ExternalTransaction (optional)
+        belongs_to: ResolvedBy (User, optional)
+    
+    validations:
+        discrepancy_type must be valid enum value
+        status must be valid enum value
+    
+    functions:
+        getAmountDifference(): Decimal or null
+            if internal_amount and external_amount exist
+                return absolute_value(internal_amount - external_amount)
+            return null
+        
+        getOpenDiscrepancies(): Array
+            return query where status IN ('open', 'investigating')
 ```
 
 #### Step 3: External Data Import Service
 
-```ruby
-# app/services/reconciliation/stripe_importer.rb
-module Reconciliation
-  class StripeImporter
-    def initialize(stripe_client: nil)
-      @stripe = stripe_client || Stripe::Client.new
-    end
+```mseudocode
+// Stripe Importer Service
+class StripeImporter
+    properties:
+        stripeClient: StripeAPIClient
     
-    # Import transactions from Stripe for a specific date
-    def import_for_date(date)
-      start_time = date.beginning_of_day.to_i
-      end_time = date.end_of_day.to_i
-      
-      Rails.logger.info "Importing Stripe transactions for #{date}"
-      
-      # Import charges
-      import_charges(start_time, end_time)
-      
-      # Import refunds
-      import_refunds(start_time, end_time)
-      
-      # Import transfers
-      import_transfers(start_time, end_time)
-      
-      Rails.logger.info "Import completed for #{date}"
-    end
+    constructor(stripeClient = null)
+        this.stripeClient = stripeClient OR new StripeClient()
     
-    private
+    // Import transactions from Stripe for a specific date
+    function importForDate(date)
+        startTime = date.beginningOfDay().toTimestamp()
+        endTime = date.endOfDay().toTimestamp()
+        
+        logInfo("Importing Stripe transactions for " + date)
+        
+        // Import charges
+        importCharges(startTime, endTime)
+        
+        // Import refunds
+        importRefunds(startTime, endTime)
+        
+        // Import transfers
+        importTransfers(startTime, endTime)
+        
+        logInfo("Import completed for " + date)
     
-    def import_charges(start_time, end_time)
-      charges = @stripe.charges.list(
-        created: { gte: start_time, lte: end_time },
-        limit: 100
-      )
-      
-      charges.auto_paging_each do |charge|
-        ExternalTransaction.find_or_create_by!(
-          source_system: 'stripe',
-          external_id: charge.id
-        ) do |txn|
-          txn.transaction_type = 'charge'
-          txn.amount = charge.amount / 100.0  # Stripe uses cents
-          txn.currency = charge.currency.upcase
-          txn.status = charge.status == 'succeeded' ? 'completed' : 'failed'
-          txn.occurred_at = Time.at(charge.created)
-          txn.raw_data = charge.to_json
+    private function importCharges(startTime, endTime)
+        charges = stripeClient.charges.list(
+            created: { gte: startTime, lte: endTime },
+            limit: 100
+        )
+        
+        for each charge in charges.autoPaging()
+            ExternalTransaction.findOrCreate(
+                source_system: 'stripe',
+                external_id: charge.id
+            ) do |txn|
+                txn.transaction_type = 'charge'
+                txn.amount = charge.amount / 100.0  // Stripe uses cents
+                txn.currency = charge.currency.toUpperCase()
+                txn.status = (charge.status == 'succeeded') ? 'completed' : 'failed'
+                txn.occurred_at = timestampFromUnix(charge.created)
+                txn.raw_data = jsonEncode(charge)
+            end
         end
-      end
+    
+    private function importRefunds(startTime, endTime)
+        refunds = stripeClient.refunds.list(
+            created: { gte: startTime, lte: endTime },
+            limit: 100
+        )
+        
+        for each refund in refunds.autoPaging()
+            ExternalTransaction.findOrCreate(
+                source_system: 'stripe',
+                external_id: refund.id
+            ) do |txn|
+                txn.transaction_type = 'refund'
+                txn.amount = -(refund.amount / 100.0)  // Negative for refunds
+                txn.currency = refund.currency.toUpperCase()
+                txn.status = (refund.status == 'succeeded') ? 'completed' : 'failed'
+                txn.occurred_at = timestampFromUnix(refund.created)
+                txn.raw_data = jsonEncode(refund)
+            end
+        end
+    
+    private function importTransfers(startTime, endTime)
+        transfers = stripeClient.transfers.list(
+            created: { gte: startTime, lte: endTime },
+            limit: 100
+        )
+        
+        for each transfer in transfers.autoPaging()
+            ExternalTransaction.findOrCreate(
+                source_system: 'stripe',
+                external_id: transfer.id
+            ) do |txn|
+                txn.transaction_type = 'transfer'
+                txn.amount = -(transfer.amount / 100.0)
+                txn.currency = transfer.currency.toUpperCase()
+                txn.status = 'completed'
+                txn.occurred_at = timestampFromUnix(transfer.created)
+                txn.raw_data = jsonEncode(transfer)
+            end
+        end
+```
+
+```mermaid
+sequenceDiagram
+    participant Importer as StripeImporter
+    participant Stripe as Stripe API
+    participant DB as Database
+    
+    Importer->>Stripe: List charges for date
+    Stripe-->>Importer: Charge records
+    loop For each charge
+        Importer->>DB: FindOrCreate(source_system='stripe', external_id)
+        alt Record exists
+            DB-->>Importer: Existing record
+        else New record
+            DB-->>Importer: New external_transaction
+        end
     end
     
-    def import_refunds(start_time, end_time)
-      refunds = @stripe.refunds.list(
-        created: { gte: start_time, lte: end_time },
-        limit: 100
-      )
-      
-      refunds.auto_paging_each do |refund|
-        ExternalTransaction.find_or_create_by!(
-          source_system: 'stripe',
-          external_id: refund.id
-        ) do |txn|
-          txn.transaction_type = 'refund'
-          txn.amount = -(refund.amount / 100.0)  # Negative for refunds
-          txn.currency = refund.currency.upcase
-          txn.status = refund.status == 'succeeded' ? 'completed' : 'failed'
-          txn.occurred_at = Time.at(refund.created)
-          txn.raw_data = refund.to_json
-        end
-      end
+    Importer->>Stripe: List refunds for date
+    Stripe-->>Importer: Refund records
+    loop For each refund
+        Importer->>DB: FindOrCreate(source_system='stripe', external_id)
+        DB-->>Importer: Record
     end
     
-    def import_transfers(start_time, end_time)
-      transfers = @stripe.transfers.list(
-        created: { gte: start_time, lte: end_time },
-        limit: 100
-      )
-      
-      transfers.auto_paging_each do |transfer|
-        ExternalTransaction.find_or_create_by!(
-          source_system: 'stripe',
-          external_id: transfer.id
-        ) do |txn|
-          txn.transaction_type = 'transfer'
-          txn.amount = -(transfer.amount / 100.0)
-          txn.currency = transfer.currency.upcase
-          txn.status = 'completed'
-          txn.occurred_at = Time.at(transfer.created)
-          txn.raw_data = transfer.to_json
-        end
-      end
+    Importer->>Stripe: List transfers for date
+    Stripe-->>Importer: Transfer records
+    loop For each transfer
+        Importer->>DB: FindOrCreate(source_system='stripe', external_id)
+        DB-->>Importer: Record
     end
-  end
-end
 ```
 
 #### Step 4: Matching Service
 
-```ruby
-# app/services/reconciliation/matching_service.rb
-module Reconciliation
-  class MatchingService
-    AUTO_MATCH_THRESHOLD = 5.minutes  # Time window for exact matches
-    PARTIAL_MATCH_THRESHOLD = 1.hour  # Time window for partial matches
+```pseudocode
+// Matching Service
+class MatchingService
+    constants:
+        AUTO_MATCH_THRESHOLD = 5 minutes  // Time window for exact matches
+        PARTIAL_MATCH_THRESHOLD = 1 hour  // Time window for partial matches
     
-    def initialize(run:)
-      @run = run
-      @auto_matched = 0
-      @manual_review = 0
-      @discrepancies = 0
-    end
+    properties:
+        run: ReconciliationRun
+        autoMatched: Integer = 0
+        manualReview: Integer = 0
+        discrepancies: Integer = 0
     
-    def perform
-      Rails.logger.info "Starting reconciliation matching for #{@run.source_system} on #{@run.date}"
-      
-      @run.update!(status: 'running', started_at: Time.current)
-      
-      # Get all unmatched external transactions for the date
-      external_txns = ExternalTransaction
-        .where(source_system: @run.source_system)
-        .for_date_range(@run.date, @run.date)
-        .unmatched
-        .to_a
-      
-      # Get all unreconciled internal transactions for the date
-      internal_txns = LedgerTransaction
-        .where(reconciliation_status: 'unreconciled')
-        .where(posted_at: @run.date.beginning_of_day..@run.date.end_of_day)
-        .includes(:ledger_entries)
-        .to_a
-      
-      Rails.logger.info "Found #{external_txns.size} external and #{internal_txns.size} internal transactions"
-      
-      # Try to match each external transaction
-      external_txns.each do |external_txn|
-        match_transaction(external_txn, internal_txns)
-      end
-      
-      # Create discrepancies for unmatched transactions
-      create_missing_internal_discrepancies(external_txns)
-      create_missing_external_discrepancies(internal_txns)
-      
-      # Update run stats
-      @run.update!(
-        completed_at: Time.current,
-        status: 'completed',
-        total_external_count: external_txns.size,
-        total_internal_count: internal_txns.size,
-        auto_matched_count: @auto_matched,
-        manual_review_count: @manual_review,
-        discrepancy_count: @discrepancies
-      )
-      
-      Rails.logger.info "Reconciliation completed. Auto-matched: #{@auto_matched}, Review needed: #{@manual_review}, Discrepancies: #{@discrepancies}"
-      
-      @run
-    rescue StandardError => e
-      @run.update!(status: 'failed', error_message: e.message)
-      raise
-    end
+    constructor(run)
+        this.run = run
     
-    private
-    
-    def match_transaction(external_txn, internal_txns)
-      # Strategy 1: Exact match by external_ref
-      if match_by_external_ref(external_txn, internal_txns)
-        return
-      end
-      
-      # Strategy 2: Exact match by amount + timestamp (within threshold)
-      if match_by_amount_and_time(external_txn, internal_txns)
-        return
-      end
-      
-      # Strategy 3: Partial match (same amount, different time)
-      if partial_match(external_txn, internal_txns)
-        return
-      end
-      
-      # No match found - will be flagged as missing internal
-    end
-    
-    def match_by_external_ref(external_txn, internal_txns)
-      # Look for internal transaction with matching external_ref
-      match = internal_txns.find { |txn| txn.external_ref == external_txn.external_id }
-      
-      return false unless match
-      
-      # Verify amounts match
-      internal_amount = match.ledger_entries.sum { |e| e.signed_amount }
-      
-      if internal_amount == external_txn.amount
-        create_match!(external_txn, match, 'exact')
-        @auto_matched += 1
-        internal_txns.delete(match)  # Remove from pool
-        true
-      else
-        # Amount mismatch - create discrepancy
-        create_amount_mismatch_discrepancy(external_txn, match, internal_amount)
-        @discrepancies += 1
-        true
-      end
-    end
-    
-    def match_by_amount_and_time(external_txn, internal_txns)
-      time_window = AUTO_MATCH_THRESHOLD
-      
-      candidates = internal_txns.select do |txn|
-        time_diff = (txn.posted_at - external_txn.occurred_at).abs
-        time_diff <= time_window
-      end
-      
-      # Find exact amount match
-      candidates.each do |candidate|
-        internal_amount = candidate.ledger_entries.sum { |e| e.signed_amount }
+    function perform()
+        logInfo("Starting reconciliation matching for " + run.source_system + " on " + run.date)
         
-        if internal_amount == external_txn.amount
-          create_match!(external_txn, candidate, 'exact')
-          @auto_matched += 1
-          internal_txns.delete(candidate)
-          return true
-        end
-      end
-      
-      false
-    end
-    
-    def partial_match(external_txn, internal_txns)
-      time_window = PARTIAL_MATCH_THRESHOLD
-      
-      candidates = internal_txns.select do |txn|
-        time_diff = (txn.posted_at - external_txn.occurred_at).abs
-        time_diff <= time_window
-      end
-      
-      candidates.each do |candidate|
-        internal_amount = candidate.ledger_entries.sum { |e| e.signed_amount }
+        run.update(status: 'running', started_at: currentTimestamp())
         
-        if internal_amount == external_txn.amount
-          # Same amount but outside auto-match window
-          create_match!(external_txn, candidate, 'partial')
-          @manual_review += 1
-          internal_txns.delete(candidate)
-          return true
+        // Get all unmatched external transactions for the date
+        externalTxns = ExternalTransaction
+            .where(source_system: run.source_system)
+            .forDateRange(run.date, run.date)
+            .getUnmatchedTransactions()
+            .toArray()
+        
+        // Get all unreconciled internal transactions for the date
+        internalTxns = LedgerTransaction
+            .where(reconciliation_status: 'unreconciled')
+            .where(posted_at: between(run.date.beginningOfDay, run.date.endOfDay))
+            .with('ledger_entries')
+            .toArray()
+        
+        logInfo("Found " + externalTxns.size + " external and " + internalTxns.size + " internal transactions")
+        
+        // Try to match each external transaction
+        for each externalTxn in externalTxns
+            matchTransaction(externalTxn, internalTxns)
         end
-      end
-      
-      false
-    end
-    
-    def create_match!(external_txn, internal_txn, match_type)
-      ReconciliationMatch.create!(
-        external_transaction: external_txn,
-        ledger_transaction: internal_txn,
-        match_type: match_type,
-        matched_amount: external_txn.amount,
-        status: 'matched'
-      )
-      
-      internal_txn.update!(
-        reconciliation_status: 'reconciled',
-        reconciled_at: Time.current
-      )
-    end
-    
-    def create_amount_mismatch_discrepancy(external_txn, internal_txn, internal_amount)
-      ReconciliationDiscrepancy.create!(
-        reconciliation_run: @run,
-        ledger_transaction: internal_txn,
-        external_transaction: external_txn,
-        discrepancy_type: 'amount_mismatch',
-        internal_amount: internal_amount,
-        external_amount: external_txn.amount,
-        status: 'open',
-        description: "Amount mismatch: Internal #{internal_amount} vs External #{external_txn.amount}"
-      )
-    end
-    
-    def create_missing_internal_discrepancies(external_txns)
-      unmatched_external = external_txns.reject(&:matched?)
-      
-      unmatched_external.each do |external_txn|
-        ReconciliationDiscrepancy.create!(
-          reconciliation_run: @run,
-          external_transaction: external_txn,
-          discrepancy_type: 'missing_internal',
-          external_amount: external_txn.amount,
-          status: 'open',
-          description: "External transaction #{external_txn.external_id} has no matching internal transaction"
+        
+        // Create discrepancies for unmatched transactions
+        createMissingInternalDiscrepancies(externalTxns)
+        createMissingExternalDiscrepancies(internalTxns)
+        
+        // Update run stats
+        run.update(
+            completed_at: currentTimestamp(),
+            status: 'completed',
+            total_external_count: externalTxns.size,
+            total_internal_count: internalTxns.size,
+            auto_matched_count: autoMatched,
+            manual_review_count: manualReview,
+            discrepancy_count: discrepancies
         )
-        @discrepancies += 1
-      end
-    end
+        
+        logInfo("Reconciliation completed. Auto-matched: " + autoMatched + 
+                ", Review needed: " + manualReview + ", Discrepancies: " + discrepancies)
+        
+        return run
     
-    def create_missing_external_discrepancies(internal_txns)
-      internal_txns.each do |internal_txn|
-        ReconciliationDiscrepancy.create!(
-          reconciliation_run: @run,
-          ledger_transaction: internal_txn,
-          discrepancy_type: 'missing_external',
-          internal_amount: internal_txn.ledger_entries.sum { |e| e.signed_amount },
-          status: 'open',
-          description: "Internal transaction #{internal_txn.id} has no matching external transaction"
+    rescue Error as e
+        run.update(status: 'failed', error_message: e.message)
+        raise e
+    
+    private function matchTransaction(externalTxn, internalTxns)
+        // Strategy 1: Exact match by external_ref
+        if matchByExternalRef(externalTxn, internalTxns)
+            return
+        end
+        
+        // Strategy 2: Exact match by amount + timestamp (within threshold)
+        if matchByAmountAndTime(externalTxn, internalTxns)
+            return
+        end
+        
+        // Strategy 3: Partial match (same amount, different time)
+        if partialMatch(externalTxn, internalTxns)
+            return
+        end
+        
+        // No match found - will be flagged as missing internal
+    
+    private function matchByExternalRef(externalTxn, internalTxns)
+        // Look for internal transaction with matching external_ref
+        match = internalTxns.find(txn => txn.external_ref == externalTxn.external_id)
+        
+        if not match
+            return false
+        end
+        
+        // Verify amounts match
+        internalAmount = match.ledger_entries.sum(entry => entry.signed_amount)
+        
+        if internalAmount == externalTxn.amount
+            createMatch(externalTxn, match, 'exact')
+            autoMatched += 1
+            internalTxns.delete(match)  // Remove from pool
+            return true
+        else
+            // Amount mismatch - create discrepancy
+            createAmountMismatchDiscrepancy(externalTxn, match, internalAmount)
+            discrepancies += 1
+            return true
+        end
+    
+    private function matchByAmountAndTime(externalTxn, internalTxns)
+        timeWindow = AUTO_MATCH_THRESHOLD
+        
+        candidates = internalTxns.filter(txn => 
+            absoluteValue(txn.posted_at - externalTxn.occurred_at) <= timeWindow
         )
-        @discrepancies += 1
-      end
-    end
-  end
-end
+        
+        // Find exact amount match
+        for each candidate in candidates
+            internalAmount = candidate.ledger_entries.sum(entry => entry.signed_amount)
+            
+            if internalAmount == externalTxn.amount
+                createMatch(externalTxn, candidate, 'exact')
+                autoMatched += 1
+                internalTxns.delete(candidate)
+                return true
+            end
+        end
+        
+        return false
+    
+    private function partialMatch(externalTxn, internalTxns)
+        timeWindow = PARTIAL_MATCH_THRESHOLD
+        
+        candidates = internalTxns.filter(txn => 
+            absoluteValue(txn.posted_at - externalTxn.occurred_at) <= timeWindow
+        )
+        
+        for each candidate in candidates
+            internalAmount = candidate.ledger_entries.sum(entry => entry.signed_amount)
+            
+            if internalAmount == externalTxn.amount
+                // Same amount but outside auto-match window
+                createMatch(externalTxn, candidate, 'partial')
+                manualReview += 1
+                internalTxns.delete(candidate)
+                return true
+            end
+        end
+        
+        return false
+    
+    private function createMatch(externalTxn, internalTxn, matchType)
+        ReconciliationMatch.create(
+            external_transaction_id: externalTxn.id,
+            ledger_transaction_id: internalTxn.id,
+            match_type: matchType,
+            matched_amount: externalTxn.amount,
+            status: 'matched'
+        )
+        
+        internalTxn.update(
+            reconciliation_status: 'reconciled',
+            reconciled_at: currentTimestamp()
+        )
+    
+    private function createAmountMismatchDiscrepancy(externalTxn, internalTxn, internalAmount)
+        ReconciliationDiscrepancy.create(
+            reconciliation_run_id: run.id,
+            ledger_transaction_id: internalTxn.id,
+            external_transaction_id: externalTxn.id,
+            discrepancy_type: 'amount_mismatch',
+            internal_amount: internalAmount,
+            external_amount: externalTxn.amount,
+            status: 'open',
+            description: "Amount mismatch: Internal " + internalAmount + " vs External " + externalTxn.amount
+        )
+    
+    private function createMissingInternalDiscrepancies(externalTxns)
+        unmatchedExternal = externalTxns.reject(txn => txn.isMatched())
+        
+        for each externalTxn in unmatchedExternal
+            ReconciliationDiscrepancy.create(
+                reconciliation_run_id: run.id,
+                external_transaction_id: externalTxn.id,
+                discrepancy_type: 'missing_internal',
+                external_amount: externalTxn.amount,
+                status: 'open',
+                description: "External transaction " + externalTxn.external_id + " has no matching internal transaction"
+            )
+            discrepancies += 1
+        end
+    
+    private function createMissingExternalDiscrepancies(internalTxns)
+        for each internalTxn in internalTxns
+            internalAmount = internalTxn.ledger_entries.sum(entry => entry.signed_amount)
+            
+            ReconciliationDiscrepancy.create(
+                reconciliation_run_id: run.id,
+                ledger_transaction_id: internalTxn.id,
+                discrepancy_type: 'missing_external',
+                internal_amount: internalAmount,
+                status: 'open',
+                description: "Internal transaction " + internalTxn.id + " has no matching external transaction"
+            )
+            discrepancies += 1
+        end
+```
+
+```mermaid
+flowchart TD
+    A[Start Matching] --> B[Get Unmatched External Txns]
+    B --> C[Get Unreconciled Internal Txns]
+    C --> D[For Each External Txn]
+    
+    D --> E{Match by External Ref?}
+    E -->|Yes| F{Amounts Match?}
+    F -->|Yes| G[Create Exact Match]
+    F -->|No| H[Create Amount Mismatch Discrepancy]
+    
+    E -->|No| I{Match by Amount + Time?}
+    I -->|Yes| G
+    I -->|No| J{Partial Match?}
+    
+    J -->|Yes| K[Create Partial Match - Manual Review]
+    J -->|No| L[Flag for Missing Internal]
+    
+    G --> M[Remove from Pool]
+    H --> M
+    K --> M
+    M --> D
+    
+    L --> D
+    
+    D -->|Done| N[Create Missing Internal Discrepancies]
+    N --> O[Create Missing External Discrepancies]
+    O --> P[Update Run Stats]
+    P --> Q[End]
 ```
 
 #### Step 5: Background Job
 
-```ruby
-# app/jobs/reconciliation/daily_reconciliation_job.rb
-module Reconciliation
-  class DailyReconciliationJob < ApplicationJob
-    queue_as :reconciliation
+```pseudocode
+// Daily Reconciliation Job
+class DailyReconciliationJob
+    constants:
+        MAX_RETRY_ATTEMPTS = 3
+        RETRY_DELAY_STRATEGY = 'exponential_backoff'
     
-    retry_on StandardError, wait: :exponentially_longer, attempts: 3
+    properties:
+        queue: 'reconciliation'
     
-    def perform(date: Date.yesterday, source_system: 'stripe')
-      Rails.logger.info "Starting daily reconciliation for #{source_system} on #{date}"
-      
-      # Step 1: Import external data
-      import_external_data(date, source_system)
-      
-      # Step 2: Create or find reconciliation run
-      run = ReconciliationRun.find_or_create_by!(
-        source_system: source_system,
-        date: date
-      )
-      
-      # Don't re-run if already completed today
-      if run.completed_at&.after?(6.hours.ago)
-        Rails.logger.info "Reconciliation already completed recently, skipping"
-        return
-      end
-      
-      # Step 3: Perform matching
-      Reconciliation::MatchingService.new(run: run).perform
-      
-      # Step 4: Send notifications
-      send_notifications(run)
-      
-      # Step 5: Alert if discrepancies found
-      if run.discrepancy_count > 0
-        alert_team(run)
-      end
-      
-      Rails.logger.info "Daily reconciliation completed: #{run.auto_matched_count} matched, #{run.discrepancy_count} discrepancies"
-    end
+    function perform(date: Date, sourceSystem: String)
+        default date = yesterday()
+        default sourceSystem = 'stripe'
+        
+        logInfo("Starting daily reconciliation for " + sourceSystem + " on " + date)
+        
+        // Step 1: Import external data
+        importExternalData(date, sourceSystem)
+        
+        // Step 2: Create or find reconciliation run
+        run = ReconciliationRun.findOrCreate(
+            source_system: sourceSystem,
+            date: date
+        )
+        
+        // Don't re-run if already completed today
+        if run.completed_at && run.completed_at > 6.hours.ago()
+            logInfo("Reconciliation already completed recently, skipping")
+            return
+        end
+        
+        // Step 3: Perform matching
+        MatchingService.new(run: run).perform()
+        
+        // Step 4: Send notifications
+        sendNotifications(run)
+        
+        // Step 5: Alert if discrepancies found
+        if run.discrepancy_count > 0
+            alertTeam(run)
+        end
+        
+        logInfo("Daily reconciliation completed: " + run.auto_matched_count + 
+                " matched, " + run.discrepancy_count + " discrepancies")
     
-    private
+    // Retry logic for failures
+    onError(error)
+        if retryCount < MAX_RETRY_ATTEMPTS
+            scheduleRetry(delay: calculateBackoff(retryCount))
+        else
+            raise error
     
-    def import_external_data(date, source_system)
-      case source_system
-      when 'stripe'
-        Reconciliation::StripeImporter.new.import_for_date(date)
-      when 'bank_of_america'
-        Reconciliation::BankImporter.new.import_for_date(date)
-      else
-        raise "Unknown source system: #{source_system}"
-      end
-    end
+    private function importExternalData(date, sourceSystem)
+        switch sourceSystem
+            case 'stripe':
+                StripeImporter.new().importForDate(date)
+            case 'bank_of_america':
+                BankImporter.new().importForDate(date)
+            default:
+                throw Error("Unknown source system: " + sourceSystem)
+        end
     
-    def send_notifications(run)
-      # Email finance team with summary
-      ReconciliationMailer.daily_summary(run).deliver_later
-    end
+    private function sendNotifications(run)
+        // Email finance team with summary
+        EmailService.sendLater(
+            template: 'reconciliation_daily_summary',
+            data: run
+        )
     
-    def alert_team(run)
-      # Slack/PagerDuty alert for discrepancies
-      message = "🚨 Reconciliation Alert: #{run.discrepancy_count} discrepancies found for #{run.source_system} on #{run.date}"
-      SlackNotifier.notify(message, channel: '#finance-ops')
-    end
-  end
-end
+    private function alertTeam(run)
+        // Slack/PagerDuty alert for discrepancies
+        message = "🚨 Reconciliation Alert: " + run.discrepancy_count + 
+                  " discrepancies found for " + run.source_system + " on " + run.date
+        SlackNotifier.notify(message, channel: '#finance-ops')
 ```
 
-#### Step 6: Controller and Views for Manual Review
+```mermaid
+flowchart LR
+    subgraph Scheduled
+        A[Schedule Daily Job] -->|6:00 AM| B{DailyReconciliationJob}
+    end
+    
+    subgraph Execution
+        B --> C[Import External Data]
+        C --> D[Create/Find ReconciliationRun]
+        D --> E{Recently Completed?}
+        E -->|Yes| F[Skip]
+        E -->|No| G[Run Matching Service]
+        G --> H[Send Email Notifications]
+        H --> I{Discrepancies > 0?}
+        I -->|Yes| J[Send Slack Alert]
+        I -->|No| K[Complete]
+        J --> K
+        F --> L[End]
+        K --> L
+    end
+    
+    subgraph Retry
+        M[Job Fails] --> N{Retry Count < 3?}
+        N -->|Yes| O[Exponential Backoff]
+        O --> B
+        N -->|No| P[Raise Error]
+    end
+```
 
-```ruby
-# app/controllers/admin/reconciliation_controller.rb
-module Admin
-  class ReconciliationController < ApplicationController
-    before_action :authenticate_user!
-    before_action :require_finance_role
+#### Step 6: API Controller for Manual Review
+
+```pseudocode
+// Reconciliation Controller
+class ReconciliationController
+    middleware:
+        - authenticateUser
+        - requireFinanceRole
     
-    def index
-      @runs = ReconciliationRun.order(date: :desc).limit(30)
-      @open_discrepancies = ReconciliationDiscrepancy.open_discrepancies.count
-    end
-    
-    def discrepancies
-      @discrepancies = ReconciliationDiscrepancy
-        .open_discrepancies
-        .includes(:ledger_transaction, :external_transaction, :reconciliation_run)
-        .order(created_at: :desc)
-        .page(params[:page])
-    end
-    
-    def resolve
-      @discrepancy = ReconciliationDiscrepancy.find(params[:id])
-      
-      case params[:resolution_action]
-      when 'match'
-        match_discrepancy(@discrepancy, params[:ledger_transaction_id])
-      when 'create_missing'
-        create_missing_transaction(@discrepancy)
-      when 'ignore'
-        ignore_discrepancy(@discrepancy)
-      else
-        render json: { error: 'Unknown action' }, status: 400
-        return
-      end
-      
-      render json: { success: true, discrepancy: @discrepancy.reload }
-    end
-    
-    def manual_match
-      # Allow manual matching of external to internal transactions
-      external_txn = ExternalTransaction.find(params[:external_transaction_id])
-      internal_txn = LedgerTransaction.find(params[:ledger_transaction_id])
-      
-      ActiveRecord::Base.transaction do
-        ReconciliationMatch.create!(
-          external_transaction: external_txn,
-          ledger_transaction: internal_txn,
-          match_type: 'manual',
-          matched_amount: external_txn.amount,
-          status: 'matched',
-          matched_by: current_user
-        )
+    // GET /admin/reconciliation
+    function index()
+        runs = ReconciliationRun
+            .orderBy('date', 'desc')
+            .limit(30)
+            .get()
         
-        internal_txn.update!(
-          reconciliation_status: 'reconciled',
-          reconciled_at: Time.current
-        )
-      end
-      
-      render json: { success: true }
-    end
-    
-    private
-    
-    def match_discrepancy(discrepancy, ledger_transaction_id)
-      internal_txn = LedgerTransaction.find(ledger_transaction_id)
-      
-      ActiveRecord::Base.transaction do
-        ReconciliationMatch.create!(
-          external_transaction: discrepancy.external_transaction,
-          ledger_transaction: internal_txn,
-          match_type: 'manual',
-          matched_amount: discrepancy.external_amount,
-          status: 'matched',
-          matched_by: current_user
-        )
+        openDiscrepancies = ReconciliationDiscrepancy
+            .getOpenDiscrepancies()
+            .count()
         
-        internal_txn.update!(
-          reconciliation_status: 'reconciled',
-          reconciled_at: Time.current
-        )
-        
-        discrepancy.update!(
-          status: 'resolved',
-          resolution_notes: params[:notes],
-          resolved_by: current_user,
-          resolved_at: Time.current
-        )
-      end
-    end
+        return view('admin/reconciliation/index', {
+            runs: runs,
+            openDiscrepancies: openDiscrepancies
+        })
     
-    def create_missing_transaction(discrepancy)
-      # Create the missing internal transaction for an external one
-      # This handles cases where webhook failed to create our record
-      ext = discrepancy.external_transaction
-      
-      ActiveRecord::Base.transaction do
-        # Create transaction based on external data
-        service = Ledger::TransactionService.new
-        entries = build_entries_from_external(ext)
+    // GET /admin/reconciliation/discrepancies
+    function discrepancies()
+        page = request.input('page', 1)
         
-        txn = service.post_transaction(
-          entries,
-          external_ref: ext.external_id,
-          description: "Reconciliation auto-created: #{ext.transaction_type}"
-        )
+        discrepancies = ReconciliationDiscrepancy
+            .getOpenDiscrepancies()
+            .with(['ledgerTransaction', 'externalTransaction', 'reconciliationRun'])
+            .orderBy('created_at', 'desc')
+            .paginate(page: page, perPage: 20)
         
-        # Auto-match it
-        ReconciliationMatch.create!(
-          external_transaction: ext,
-          ledger_transaction: txn,
-          match_type: 'manual',
-          matched_amount: ext.amount,
-          status: 'matched',
-          matched_by: current_user
-        )
-        
-        discrepancy.update!(
-          status: 'resolved',
-          resolution_notes: 'Created missing internal transaction',
-          resolved_by: current_user,
-          resolved_at: Time.current
-        )
-      end
-    end
+        return view('admin/reconciliation/discrepancies', {
+            discrepancies: discrepancies
+        })
     
-    def ignore_discrepancy(discrepancy)
-      discrepancy.update!(
-        status: 'ignored',
-        resolution_notes: params[:notes],
-        resolved_by: current_user,
-        resolved_at: Time.current
-      )
-    end
+    // POST /admin/reconciliation/:id/resolve
+    function resolve(discrepancyId)
+        discrepancy = ReconciliationDiscrepancy.find(discrepancyId)
+        action = request.input('resolution_action')
+        
+        switch action
+            case 'match':
+                ledgerTransactionId = request.input('ledger_transaction_id')
+                matchDiscrepancy(discrepancy, ledgerTransactionId)
+            case 'create_missing':
+                createMissingTransaction(discrepancy)
+            case 'ignore':
+                ignoreDiscrepancy(discrepancy)
+            default:
+                return response.json({ error: 'Unknown action' }, status: 400)
+        end
+        
+        return response.json({ 
+            success: true, 
+            discrepancy: discrepancy.reload() 
+        })
     
-    def require_finance_role
-      unless current_user.has_role?(:finance) || current_user.has_role?(:admin)
-        redirect_to root_path, alert: 'Access denied'
-      end
+    // POST /admin/reconciliation/manual_match
+    function manualMatch()
+        externalTransactionId = request.input('external_transaction_id')
+        ledgerTransactionId = request.input('ledger_transaction_id')
+        
+        externalTxn = ExternalTransaction.find(externalTransactionId)
+        internalTxn = LedgerTransaction.find(ledgerTransactionId)
+        
+        database.transaction() do
+            ReconciliationMatch.create(
+                external_transaction_id: externalTxn.id,
+                ledger_transaction_id: internalTxn.id,
+                match_type: 'manual',
+                matched_amount: externalTxn.amount,
+                status: 'matched',
+                matched_by_id: currentUser.id
+            )
+            
+            internalTxn.update(
+                reconciliation_status: 'reconciled',
+                reconciled_at: currentTimestamp()
+            )
+        end
+        
+        return response.json({ success: true })
+    
+    private function matchDiscrepancy(discrepancy, ledgerTransactionId)
+        internalTxn = LedgerTransaction.find(ledgerTransactionId)
+        
+        database.transaction() do
+            ReconciliationMatch.create(
+                external_transaction_id: discrepancy.external_transaction_id,
+                ledger_transaction_id: internalTxn.id,
+                match_type: 'manual',
+                matched_amount: discrepancy.external_amount,
+                status: 'matched',
+                matched_by_id: currentUser.id
+            )
+            
+            internalTxn.update(
+                reconciliation_status: 'reconciled',
+                reconciled_at: currentTimestamp()
+            )
+            
+            discrepancy.update(
+                status: 'resolved',
+                resolution_notes: request.input('notes'),
+                resolved_by_id: currentUser.id,
+                resolved_at: currentTimestamp()
+            )
+        end
+    
+    private function createMissingTransaction(discrepancy)
+        // Create the missing internal transaction for an external one
+        // This handles cases where webhook failed to create our record
+        ext = discrepancy.externalTransaction
+        
+        database.transaction() do
+            // Create transaction based on external data
+            service = new LedgerTransactionService()
+            entries = buildEntriesFromExternal(ext)
+            
+            txn = service.postTransaction(
+                entries: entries,
+                external_ref: ext.external_id,
+                description: "Reconciliation auto-created: " + ext.transaction_type
+            )
+            
+            // Auto-match it
+            ReconciliationMatch.create(
+                external_transaction_id: ext.id,
+                ledger_transaction_id: txn.id,
+                match_type: 'manual',
+                matched_amount: ext.amount,
+                status: 'matched',
+                matched_by_id: currentUser.id
+            )
+            
+            discrepancy.update(
+                status: 'resolved',
+                resolution_notes: 'Created missing internal transaction',
+                resolved_by_id: currentUser.id,
+                resolved_at: currentTimestamp()
+            )
+        end
+    
+    private function ignoreDiscrepancy(discrepancy)
+        discrepancy.update(
+            status: 'ignored',
+            resolution_notes: request.input('notes'),
+            resolved_by_id: currentUser.id,
+            resolved_at: currentTimestamp()
+        )
+    
+    private function requireFinanceRole()
+        if not (currentUser.hasRole('finance') OR currentUser.hasRole('admin'))
+            return redirect('/').with('alert', 'Access denied')
+```
+
+```mermaid
+flowchart TD
+    subgraph "Manual Review Flow"
+        A[Finance Team] --> B[View Discrepancies List]
+        B --> C{Choose Action}
+        
+        C -->|Match| D[Select Internal Txn]
+        D --> E[POST /resolve - match]
+        
+        C -->|Create Missing| F[Create from External Data]
+        F --> G[POST /resolve - create_missing]
+        
+        C -->|Ignore| H[Add Notes]
+        H --> I[POST /resolve - ignore]
+        
+        E --> J[DB Transaction]
+        G --> J
+        I --> J
+        
+        J --> K[Create Match Record]
+        K --> L[Update Ledger Txn Status]
+        L --> M[Update Discrepancy Status]
+        M --> N[Return Success]
     end
-  end
-end
 ```
 
 #### Step 7: Schedule the Job
 
-```ruby
-# config/schedule.rb (using whenever gem)
-every 1.day, at: '6:00 am' do
-  rake 'reconciliation:daily'
-end
+```pseudocode
+// Job Scheduler Configuration (e.g., cron, task scheduler, job queue)
 
-# lib/tasks/reconciliation.rake
-namespace :reconciliation do
-  desc 'Run daily reconciliation for all source systems'
-  task daily: :environment do
-    date = Date.yesterday
+// Schedule: Daily at 6:00 AM
+scheduleTask(
+    name: 'daily_reconciliation',
+    cron: '0 6 * * *',  // Every day at 6:00 AM
+    command: 'reconciliation:daily'
+)
+
+// Task Implementation
+function reconciliationDailyTask()
+    date = yesterday()
+    sourceSystems = ['stripe', 'bank_of_america']
     
-    ['stripe', 'bank_of_america'].each do |source_system|
-      Reconciliation::DailyReconciliationJob.perform_later(
-        date: date,
-        source_system: source_system
-      )
+    for each sourceSystem in sourceSystems
+        JobQueue.push(
+            job: DailyReconciliationJob,
+            data: {
+                date: date,
+                source_system: sourceSystem
+            }
+        )
     end
-  end
-end
+```
+
+```mermaid
+gantt
+    title Daily Reconciliation Schedule
+    dateFormat  HH:mm
+    axisFormat %H:%M
+    
+    section Morning
+    Reconciliation Job Queue    :06:00, 5m
+    Stripe Import               :06:00, 10m
+    Stripe Matching             :after Stripe Import, 5m
+    Bank Import                 :06:00, 15m
+    Bank Matching               :after Bank Import, 5m
+    Notifications & Alerts      :after Stripe Matching, 2m
 ```
 
 ### Key Takeaways
 
 1. **Separate Concerns**: Import, matching, and resolution are separate steps. If one fails, others can continue.
 
-2. **Idempotent Imports**: Use `find_or_create_by` with external IDs so re-running doesn't create duplicates.
+2. **Idempotent Imports**: Use `findOrCreate` with external IDs so re-running doesn't create duplicates.
 
 3. **Multiple Match Strategies**: Start with exact matches (external_ref), then fuzzy matches (amount + time), then manual review.
 
@@ -886,110 +1100,194 @@ flowchart TD
 
 For financial systems, I recommend pessimistic locking at the account level. It's simpler and prevents the complexity of retry logic.
 
-Here's how to implement it in Rails:
-
-```ruby
+```pseudocode
+// Transaction Service with Pessimistic Locking
 class TransactionService
-  def self.post_transaction(entries, external_ref: nil)
-    # Sort account IDs to prevent deadlocks
-    # Always lock in the same order
-    account_ids = entries.map { |e| e[:account_id] }.sort
-    
-    ActiveRecord::Base.transaction do
-      # Lock all affected accounts in consistent order
-      accounts = Account.where(id: account_ids)
-                       .order(:id)
-                       .lock
-                       .to_a
-      
-      # Check idempotency
-      if external_ref.present?
-        existing = LedgerTransaction.find_by(external_ref: external_ref)
-        return existing if existing
-      end
-      
-      # Validate entries balance
-      total = entries.sum { |e| e[:direction] == 'debit' ? e[:amount] : -e[:amount] }
-      raise "Unbalanced transaction" unless total.zero?
-      
-      # Check sufficient funds for debits
-      entries.each do |entry|
-        if entry[:direction] == 'debit'
-          account = accounts.find { |a| a.id == entry[:account_id] }
-          new_balance = account.balance - entry[:amount]
-          raise InsufficientFundsError if new_balance < 0
+    function postTransaction(entries, externalRef: String = null)
+        // Sort account IDs to prevent deadlocks
+        // Always lock in the same order
+        accountIds = entries
+            .map(entry => entry.account_id)
+            .sort()
+        
+        return database.transaction() do
+            // Lock all affected accounts in consistent order
+            accounts = Account
+                .whereIn('id', accountIds)
+                .orderBy('id', 'asc')
+                .lockForUpdate()
+                .get()
+            
+            // Check idempotency
+            if externalRef is not null
+                existing = LedgerTransaction.findByExternalRef(externalRef)
+                if existing
+                    return existing
+                end
+            end
+            
+            // Validate entries balance
+            total = entries.sum(entry => 
+                entry.direction == 'debit' ? entry.amount : -entry.amount
+            )
+            
+            if total != 0
+                throw new ValidationError("Unbalanced transaction")
+            end
+            
+            // Check sufficient funds for debits
+            for each entry in entries
+                if entry.direction == 'debit'
+                    account = accounts.find(a => a.id == entry.account_id)
+                    newBalance = account.balance - entry.amount
+                    
+                    if newBalance < 0
+                        throw new InsufficientFundsError("Account " + account.id + " has insufficient funds")
+                    end
+                end
+            end
+            
+            // Create transaction and entries atomically
+            txn = LedgerTransaction.create(
+                external_ref: externalRef,
+                status: 'posted',
+                posted_at: currentTimestamp()
+            )
+            
+            for each entry in entries
+                account = accounts.find(a => a.id == entry.account_id)
+                
+                LedgerEntry.create(
+                    transaction_id: txn.id,
+                    account_id: account.id,
+                    direction: entry.direction,
+                    amount: entry.amount,
+                    currency: entry.currency
+                )
+                
+                // Update balance
+                amountChange = entry.direction == 'debit' 
+                    ? -entry.amount 
+                    : entry.amount
+                account.update(balance: account.balance + amountChange)
+            end
+            
+            // Emit event for projections
+            EventStore.publish(new TransactionPostedEvent(txn))
+            
+            return txn
         end
-      end
-      
-      # Create transaction and entries atomically
-      txn = LedgerTransaction.create!(
-        external_ref: external_ref,
-        status: 'posted',
-        posted_at: Time.current
-      )
-      
-      entries.each do |entry|
-        account = accounts.find { |a| a.id == entry[:account_id] }
-        
-        LedgerEntry.create!(
-          transaction: txn,
-          account: account,
-          direction: entry[:direction],
-          amount: entry[:amount],
-          currency: entry[:currency]
-        )
-        
-        # Update balance (or use trigger/database computed)
-        amount_change = entry[:direction] == 'debit' ? -entry[:amount] : entry[:amount]
-        account.update!(balance: account.balance + amount_change)
-      end
-      
-      # Emit event for projections
-      EventStore.publish(TransactionPostedEvent.new(txn))
-      
-      txn
-    end
-  end
-end
+```
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant DB as Database
+    participant Acc1 as Account 1
+    participant Acc2 as Account 2
+    participant Txn as Transactions
+    participant Event as Event Store
+    
+    Client->>DB: BEGIN TRANSACTION
+    
+    Note over DB: Lock accounts in sorted order
+    DB->>Acc1: SELECT FOR UPDATE WHERE id=1
+    DB->>Acc2: SELECT FOR UPDATE WHERE id=2
+    
+    Client->>Txn: Check idempotency (external_ref)
+    Txn-->>Client: Not found
+    
+    Client->>Acc1: Check balance >= debit
+    Acc1-->>Client: OK
+    Client->>Acc2: Check balance (credit always OK)
+    
+    Client->>Txn: Create transaction record
+    Client->>DB: Create ledger entries
+    
+    Client->>Acc1: Update balance (debit)
+    Client->>Acc2: Update balance (credit)
+    
+    Client->>Event: Publish TransactionPostedEvent
+    
+    Client->>DB: COMMIT
+    Note over DB: Locks released
 ```
 
 ### Optimistic Locking (Alternative)
 
 If you expect low contention, optimistic locking avoids blocking:
 
-```ruby
-class Account < ApplicationRecord
-  # Add lock_version column to accounts table
-  # Rails handles this automatically
-end
+```pseudocode
+// Account Model with Optimistic Locking
+class Account
+    properties:
+        id: BigInt
+        balance: Decimal
+        lock_version: Integer  // Tracks version for optimistic locking
+        created_at: Timestamp
+        updated_at: Timestamp
 
+// Optimistic Transaction Service
 class OptimisticTransactionService
-  def self.post_transaction(entries, external_ref: nil, max_retries: 3)
-    retries = 0
+    MAX_RETRIES = 3
     
-    begin
-      ActiveRecord::Base.transaction do
-        # Read current balances
-        account_ids = entries.map { |e| e[:account_id] }
-        accounts = Account.where(id: account_ids).to_a
+    function postTransaction(entries, externalRef: String = null)
+        retryCount = 0
         
-        # ... validation logic ...
-        
-        # Update will fail if lock_version changed
-        accounts.each do |account|
-          account.update!(balance: calculate_new_balance(account, entries))
+        while true
+            try
+                return database.transaction() do
+                    // Read current balances
+                    accountIds = entries.map(entry => entry.account_id)
+                    accounts = Account.whereIn('id', accountIds).get()
+                    
+                    // ... validation logic ...
+                    
+                    // Update will fail if lock_version changed
+                    for each account in accounts
+                        newBalance = calculateNewBalance(account, entries)
+                        
+                        // This throws StaleObjectError if version changed
+                        account.update(
+                            balance: newBalance,
+                            lock_version: account.lock_version + 1
+                        )
+                    end
+                    
+                    // Create transaction
+                    return LedgerTransaction.create(...)
+                end
+                
+            catch StaleObjectError
+                retryCount += 1
+                
+                if retryCount >= MAX_RETRIES
+                    throw new TransactionConflictError("Transaction conflict, please retry")
+                end
+                
+                // Wait before retry (exponential backoff)
+                sleep(calculateBackoff(retryCount))
+            end
         end
-        
-        # Create transaction
-        LedgerTransaction.create!(...)
-      end
-    rescue ActiveRecord::StaleObjectError
-      retries += 1
-      retry if retries < max_retries
-      raise "Transaction conflict, please retry"
-    end
-  end
-end
+```
+
+```mermaid
+flowchart TD
+    A[Start Transaction] --> B[Read Accounts with Version]
+    B --> C[Validate Business Logic]
+    C --> D[Update Balances]
+    D --> E{Version Changed?}
+    
+    E -->|No| F[Commit Success]
+    E -->|Yes| G[StaleObjectError]
+    
+    G --> H{Retry < 3?}
+    H -->|Yes| I[Wait & Retry]
+    I --> B
+    H -->|No| J[Throw Conflict Error]
+    
+    F --> K[End]
+    J --> K
 ```
 
 ### Deadlock Prevention
@@ -998,39 +1296,119 @@ The key insight: **always acquire locks in the same order**. If Transaction A lo
 
 Always sort your account IDs before locking:
 
-```ruby
-# Good - consistent ordering prevents deadlocks
-account_ids = entries.map { |e| e[:account_id] }.sort
-accounts = Account.where(id: account_ids).order(:id).lock.to_a
+```pseudocode
+// Good - consistent ordering prevents deadlocks
+accountIds = entries
+    .map(entry => entry.account_id)
+    .sort()
 
-# Bad - ordering depends on input, leads to deadlocks
-account_ids = entries.map { |e| e[:account_id] }
-accounts = Account.where(id: account_ids).lock.to_a
+accounts = Account
+    .whereIn('id', accountIds)
+    .orderBy('id', 'asc')
+    .lockForUpdate()
+    .get()
+
+// Bad - ordering depends on input, leads to deadlocks
+accountIds = entries.map(entry => entry.account_id)
+
+accounts = Account
+    .whereIn('id', accountIds)
+    .lockForUpdate()  // No ORDER BY!
+    .get()
+```
+
+```mermaid
+sequenceDiagram
+    participant T1 as Transaction 1
+    participant T2 as Transaction 2
+    participant Acc1 as Account 1
+    participant Acc2 as Account 2
+    
+    rect rgb(200, 255, 200)
+        Note over T1,T2: Good: Both sort accounts [1, 2]
+        T1->>Acc1: Lock Account 1
+        T2->>Acc1: Wait for Account 1
+        T1->>Acc2: Lock Account 2
+        T1->>Acc1: Unlock
+        T2->>Acc1: Lock Account 1
+        T2->>Acc2: Lock Account 2
+        T2->>Acc1: Unlock
+        T2->>Acc2: Unlock
+    end
+    
+    rect rgb(255, 200, 200)
+        Note over T1,T2: Bad: Different lock orders
+        T1->>Acc1: Lock Account 1
+        T2->>Acc2: Lock Account 2
+        T1->>Acc2: Wait for Account 2
+        T2->>Acc1: Wait for Account 1
+        Note over T1,T2: DEADLOCK!
+    end
 ```
 
 ### Distributed Locks
 
 If you're running multiple application servers, database locks alone aren't enough. You need distributed locking to prevent the same external_ref from being processed twice:
 
-```ruby
+```pseudocode
+// Distributed Transaction Service
 class DistributedTransactionService
-  def self.post_transaction(entries, external_ref:)
-    # Redis distributed lock
-    lock_key = "ledger:txn:#{external_ref}"
+    function postTransaction(entries, externalRef: String)
+        // Generate unique lock key
+        lockKey = "ledger:txn:" + externalRef
+        
+        // Try to acquire distributed lock (e.g., using Redis, DynamoDB, or Zookeeper)
+        lockAcquired = DistributedLock.acquire(
+            key: lockKey,
+            expireAfter: 30 seconds,  // Auto-release if process crashes
+            timeout: 5 seconds        // Max time to wait for lock
+        )
+        
+        if not lockAcquired
+            throw new LockTimeoutError("Could not acquire lock, transaction may be in progress")
+        end
+        
+        try
+            // Check if already processed (defense in depth)
+            if LedgerTransaction.exists(externalRef: externalRef)
+                return  // Already processed
+            end
+            
+            // Proceed with database transaction
+            return database.transaction() do
+                // ... pessimistic locking logic ...
+                // ... post transaction ...
+            end
+            
+        finally
+            // Always release the lock
+            DistributedLock.release(lockKey)
+        end
+```
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant DL as Distributed Lock
+    participant DB as Database
     
-    Redis.current.lock(lock_key, expire: 30, timeout: 5) do
-      # Check if already processed (defense in depth)
-      return if LedgerTransaction.exists?(external_ref: external_ref)
-      
-      # Proceed with database transaction
-      ActiveRecord::Base.transaction do
-        # ... post transaction ...
-      end
-    end
-  rescue Redis::Lock::LockTimeout
-    raise "Could not acquire lock, transaction may be in progress"
-  end
-end
+    Client->>DL: Acquire Lock (ledger:txn:abc123)
+    DL-->>Client: Lock Acquired
+    
+    Client->>DB: Check if exists (external_ref)
+    DB-->>Client: Not Found
+    
+    Client->>DB: BEGIN TRANSACTION
+    Client->>DB: Lock accounts FOR UPDATE
+    Client->>DB: Validate & Create transaction
+    Client->>DB: COMMIT
+    
+    Client->>DL: Release Lock
+    
+    Note over Client,DL: If another server tries same external_ref
+    
+    Client2->>DL: Acquire Lock (ledger:txn:abc123)
+    DL-->>Client2: Lock Exists (wait or fail)
 ```
 
 

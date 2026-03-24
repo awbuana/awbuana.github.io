@@ -118,30 +118,31 @@ Let me tell you about a real problem I encountered at a fintech startup. We proc
 Here's what happened:
 
 **Friday (Authorization Day):**
-```ruby
-# What we did WRONG - recorded revenue immediately
-class PaymentService
-  def process_payment(amount, customer_id)
-    # Authorize with Stripe
-    charge = Stripe::Charge.create(
-      amount: amount,
-      currency: 'usd',
-      capture: false  # Just authorize, don't settle yet
+
+```
+Pseudocode: WRONG approach - recording revenue immediately
+
+FUNCTION process_payment(amount, customer_id):
+    // Authorize with payment processor
+    authorization = payment_processor.authorize(
+        amount: amount,
+        currency: 'usd',
+        capture: false  // Just authorize, don't settle yet
     )
     
-    # ❌ WRONG: Recorded as revenue immediately
-    Transaction.create!(
-      from_account: customer_id,
-      to_account: 'revenue',  # Revenue credited immediately!
-      amount: amount,
-      status: 'completed'
+    // ❌ WRONG: Recorded as revenue immediately
+    transaction = create_transaction(
+        from_account: customer_id,
+        to_account: 'revenue',  // Revenue credited immediately!
+        amount: amount,
+        status: 'completed'
     )
     
-    # Customer sees charge on their card
-    # Company sees revenue in books
-    # Everyone thinks transaction is done
-  end
-end
+    // Customer sees charge on their card
+    // Company sees revenue in books
+    // Everyone thinks transaction is done
+    RETURN transaction
+END FUNCTION
 ```
 
 **Monday Morning (The Disaster):**
@@ -152,41 +153,43 @@ Finance: "Our Stripe dashboard shows $1,950,000 in settlements,
 
 Engineering: "Let me check..."
 
-# Found the issues:
-# 1. 23 transactions failed settlement (card expired, insufficient funds)
-#    Total: $4,200 - We recorded revenue, customer never paid
-#
-# 2. 156 transactions had fees deducted 
-#    Total: $45,800 - We recorded gross, Stripe settled net
-#
-# 3. 3 transactions were duplicate authorizations
-#    Total: $1,500 - Recorded twice, settled once
-#
-# Total discrepancy: $51,500
+Found the issues:
+1. 23 transactions failed settlement (card expired, insufficient funds)
+   Total: $4,200 - We recorded revenue, customer never paid
+
+2. 156 transactions had fees deducted 
+   Total: $45,800 - We recorded gross, Stripe settled net
+
+3. 3 transactions were duplicate authorizations
+   Total: $1,500 - Recorded twice, settled once
+
+Total discrepancy: $51,500
 ```
 
 **The Cleanup (2 weeks of hell):**
-```ruby
-# Manual fixes required:
-# 1. Reverse 23 failed transactions
-failed_transactions.each do |txn|
-  create_reversal_entry(txn, reason: "Settlement failed")
-end
 
-# 2. Adjust 156 transactions for fees
-fees_transactions.each do |txn|
-  # Create fee expense entries
-  create_adjustment_entry(txn, fee_amount: calculate_fee(txn))
-end
+```
+Pseudocode: Manual fixes required
 
-# 3. Find and reverse 3 duplicates
-duplicates.each do |txn|
-  create_reversal_entry(txn, reason: "Duplicate authorization")
-end
+// 1. Reverse 23 failed transactions
+FOR EACH failed_transaction IN failed_transactions:
+    create_reversal_entry(failed_transaction, reason: "Settlement failed")
+END FOR
 
-# 4. Reconcile with Stripe (took 3 days)
-# 5. Explain to auditors why revenue numbers changed
-# 6. Restate financials for November
+// 2. Adjust 156 transactions for fees
+FOR EACH fee_transaction IN fees_transactions:
+    // Create fee expense entries
+    create_adjustment_entry(fee_transaction, fee_amount: calculate_fee(fee_transaction))
+END FOR
+
+// 3. Find and reverse 3 duplicates
+FOR EACH duplicate IN duplicates:
+    create_reversal_entry(duplicate, reason: "Duplicate authorization")
+END FOR
+
+// 4. Reconcile with Stripe (took 3 days)
+// 5. Explain to auditors why revenue numbers changed
+// 6. Restate financials for November
 ```
 
 **Root Cause:** We treated authorizations like completed payments. They're not.
@@ -195,233 +198,238 @@ end
 
 Here's how we fixed it:
 
-**Step 1: Database Migration**
-```ruby
-class AddHoldingAccounts < ActiveRecord::Migration[7.0]
-  def change
-    # Create holding account
-    Account.create!(
-      account_number: 'holding_usd',
-      account_type: 'liability',
-      name: 'USD Holding Account',
-      description: 'Unsettled payment authorizations'
-    )
-    
-    # Track authorization state
-    add_column :transactions, :authorization_id, :string
-    add_column :transactions, :settled_at, :datetime
-    add_index :transactions, :authorization_id
-  end
-end
+**Step 1: Database Schema Update**
+
+```sql
+-- Create holding account
+INSERT INTO accounts (
+    account_number,
+    account_type,
+    name,
+    description
+) VALUES (
+    'holding_usd',
+    'liability',
+    'USD Holding Account',
+    'Unsettled payment authorizations'
+);
+
+-- Track authorization state
+ALTER TABLE transactions ADD COLUMN authorization_id VARCHAR;
+ALTER TABLE transactions ADD COLUMN settled_at TIMESTAMP;
+CREATE INDEX idx_transactions_authorization_id ON transactions(authorization_id);
 ```
 
 **Step 2: Fixed Payment Service**
-```ruby
-class PaymentService
-  HOLDING_ACCOUNT = 'holding_usd'
-  REVENUE_ACCOUNT = 'revenue_sales'
-  FEE_ACCOUNT = 'expense_processor_fees'
-  
-  def process_payment(amount, customer_id)
-    # Step 1: Authorize with Stripe
-    authorization = Stripe::Authorization.create(
-      amount: amount,
-      currency: 'usd',
-      capture: false
+
+```
+Pseudocode: Payment Service with Holding Accounts
+
+CONSTANTS:
+    HOLDING_ACCOUNT = 'holding_usd'
+    REVENUE_ACCOUNT = 'revenue_sales'
+    FEE_ACCOUNT = 'expense_processor_fees'
+
+FUNCTION process_payment(amount, customer_id):
+    // Step 1: Authorize with payment processor
+    authorization = payment_processor.authorize(
+        amount: amount,
+        currency: 'usd',
+        capture: false
     )
     
-    ActiveRecord::Base.transaction do
-      # ✓ CORRECT: Record authorization (funds held, not revenue)
-      auth_txn = LedgerTransaction.create!(
-        external_ref: authorization.id,
-        status: 'posted',
-        transaction_type: 'authorization',
-        description: "Authorization: #{authorization.id}"
-      )
-      
-      # Debit customer (hold their funds)
-      LedgerEntry.create!(
-        transaction: auth_txn,
-        account_id: customer_id,
-        direction: 'debit',
-        amount: amount,
-        description: "Authorization hold"
-      )
-      
-      # Credit holding account (not revenue!)
-      LedgerEntry.create!(
-        transaction: auth_txn,
-        account: Account.find_by!(account_number: HOLDING_ACCOUNT),
-        direction: 'credit',
-        amount: amount,
-        description: "Funds held for #{authorization.id}"
-      )
-    end
+    BEGIN TRANSACTION
+        // ✓ CORRECT: Record authorization (funds held, not revenue)
+        auth_txn = create_ledger_transaction(
+            external_ref: authorization.id,
+            status: 'posted',
+            transaction_type: 'authorization',
+            description: "Authorization: " + authorization.id
+        )
+        
+        // Debit customer (hold their funds)
+        create_ledger_entry(
+            transaction: auth_txn,
+            account_id: customer_id,
+            direction: 'debit',
+            amount: amount,
+            description: "Authorization hold"
+        )
+        
+        // Credit holding account (not revenue!)
+        create_ledger_entry(
+            transaction: auth_txn,
+            account_number: HOLDING_ACCOUNT,
+            direction: 'credit',
+            amount: amount,
+            description: "Funds held for " + authorization.id
+        )
+    COMMIT TRANSACTION
     
-    { success: true, authorization_id: authorization.id }
-  end
-  
-  def settle_payment(authorization_id)
-    # Step 2: Actually charge the card (settlement)
-    charge = Stripe::Charge.capture(authorization_id)
+    RETURN { success: true, authorization_id: authorization.id }
+END FUNCTION
+
+FUNCTION settle_payment(authorization_id):
+    // Step 2: Actually charge the card (settlement)
+    charge = payment_processor.capture(authorization_id)
     
-    # Calculate actual amounts
-    gross_amount = charge.amount / 100.0
-    fee_amount = calculate_stripe_fee(gross_amount)
+    // Calculate actual amounts
+    gross_amount = charge.amount
+    fee_amount = calculate_processor_fee(gross_amount)
     net_amount = gross_amount - fee_amount
     
-    ActiveRecord::Base.transaction do
-      # Create settlement transaction
-      settlement_txn = LedgerTransaction.create!(
-        external_ref: "settlement:#{charge.id}",
-        status: 'posted',
-        transaction_type: 'settlement',
-        description: "Settlement for auth #{authorization_id}"
-      )
-      
-      # Move from holding to actual accounts
-      holding_account = Account.find_by!(account_number: HOLDING_ACCOUNT)
-      
-      # 1. Debit holding (release the hold)
-      LedgerEntry.create!(
-        transaction: settlement_txn,
-        account: holding_account,
-        direction: 'debit',
-        amount: gross_amount
-      )
-      
-      # 2. Credit revenue (net amount only)
-      LedgerEntry.create!(
-        transaction: settlement_txn,
-        account: Account.find_by!(account_number: REVENUE_ACCOUNT),
-        direction: 'credit',
-        amount: net_amount
-      )
-      
-      # 3. Credit fee expense
-      LedgerEntry.create!(
-        transaction: settlement_txn,
-        account: Account.find_by!(account_number: FEE_ACCOUNT),
-        direction: 'credit',
-        amount: fee_amount
-      )
-      
-      # Mark authorization as settled
-      auth_txn = LedgerTransaction.find_by!(external_ref: authorization_id)
-      auth_txn.update!(settled_at: Time.current)
-    end
+    BEGIN TRANSACTION
+        // Create settlement transaction
+        settlement_txn = create_ledger_transaction(
+            external_ref: "settlement:" + charge.id,
+            status: 'posted',
+            transaction_type: 'settlement',
+            description: "Settlement for auth " + authorization_id
+        )
+        
+        holding_account = get_account(HOLDING_ACCOUNT)
+        
+        // 1. Debit holding (release the hold)
+        create_ledger_entry(
+            transaction: settlement_txn,
+            account: holding_account,
+            direction: 'debit',
+            amount: gross_amount
+        )
+        
+        // 2. Credit revenue (net amount only)
+        create_ledger_entry(
+            transaction: settlement_txn,
+            account_number: REVENUE_ACCOUNT,
+            direction: 'credit',
+            amount: net_amount
+        )
+        
+        // 3. Credit fee expense
+        create_ledger_entry(
+            transaction: settlement_txn,
+            account_number: FEE_ACCOUNT,
+            direction: 'credit',
+            amount: fee_amount
+        )
+        
+        // Mark authorization as settled
+        auth_txn = get_transaction_by_external_ref(authorization_id)
+        update_transaction(auth_txn, settled_at: current_time())
+    COMMIT TRANSACTION
     
-    { 
-      success: true, 
-      gross: gross_amount,
-      fees: fee_amount,
-      net: net_amount
+    RETURN { 
+        success: true, 
+        gross: gross_amount,
+        fees: fee_amount,
+        net: net_amount
     }
-  end
-  
-  def void_authorization(authorization_id, reason: nil)
-    # Step 3: Handle failed/expired authorizations
-    Stripe::Authorization.void(authorization_id)
+END FUNCTION
+
+FUNCTION void_authorization(authorization_id, reason):
+    // Step 3: Handle failed/expired authorizations
+    payment_processor.void(authorization_id)
     
-    auth_txn = LedgerTransaction.find_by!(external_ref: authorization_id)
+    auth_txn = get_transaction_by_external_ref(authorization_id)
     
-    ActiveRecord::Base.transaction do
-      # Return funds to customer
-      reversal_txn = LedgerTransaction.create!(
-        external_ref: "void:#{authorization_id}",
-        status: 'posted',
-        transaction_type: 'void',
-        description: "Void: #{reason}"
-      )
-      
-      holding_account = Account.find_by!(account_number: HOLDING_ACCOUNT)
-      
-      # Debit holding
-      LedgerEntry.create!(
-        transaction: reversal_txn,
-        account: holding_account,
-        direction: 'debit',
-        amount: auth_txn.amount
-      )
-      
-      # Credit customer
-      LedgerEntry.create!(
-        transaction: reversal_txn,
-        account_id: auth_txn.source_account_id,
-        direction: 'credit',
-        amount: auth_txn.amount
-      )
-    end
-  end
-  
-  private
-  
-  def calculate_stripe_fee(amount)
-    (amount * 0.029 + 0.30).round(2)
-  end
-end
+    BEGIN TRANSACTION
+        // Return funds to customer
+        reversal_txn = create_ledger_transaction(
+            external_ref: "void:" + authorization_id,
+            status: 'posted',
+            transaction_type: 'void',
+            description: "Void: " + reason
+        )
+        
+        holding_account = get_account(HOLDING_ACCOUNT)
+        
+        // Debit holding
+        create_ledger_entry(
+            transaction: reversal_txn,
+            account: holding_account,
+            direction: 'debit',
+            amount: auth_txn.amount
+        )
+        
+        // Credit customer
+        create_ledger_entry(
+            transaction: reversal_txn,
+            account_id: auth_txn.source_account_id,
+            direction: 'credit',
+            amount: auth_txn.amount
+        )
+    COMMIT TRANSACTION
+END FUNCTION
+
+FUNCTION calculate_processor_fee(amount):
+    RETURN ROUND(amount * 0.029 + 0.30, 2)
+END FUNCTION
 ```
 
 **Step 3: Daily Reconciliation Report**
-```ruby
-class DailyReconciliationReport
-  def self.generate(date: Date.yesterday)
-    holding_account = Account.find_by!(account_number: 'holding_usd')
+
+```
+Pseudocode: Daily Reconciliation Report
+
+FUNCTION generate_daily_reconciliation_report(date):
+    holding_account = get_account('holding_usd')
     
-    # Authorizations from yesterday
-    authorizations = LedgerTransaction
-      .where(transaction_type: 'authorization')
-      .where(created_at: date.beginning_of_day..date.end_of_day)
-      .sum(:amount)
+    // Authorizations from date
+    authorizations = SUM(
+        SELECT amount FROM transactions
+        WHERE transaction_type = 'authorization'
+        AND created_at BETWEEN date.start AND date.end
+    )
     
-    # Settlements from yesterday  
-    settlements = LedgerTransaction
-      .where(transaction_type: 'settlement')
-      .where(created_at: date.beginning_of_day..date.end_of_day)
-      .sum(:amount)
+    // Settlements from date
+    settlements = SUM(
+        SELECT amount FROM transactions
+        WHERE transaction_type = 'settlement'
+        AND created_at BETWEEN date.start AND date.end
+    )
     
-    # Voids from yesterday
-    voids = LedgerTransaction
-      .where(transaction_type: 'void')
-      .where(created_at: date.beginning_of_day..date.end_of_day)
-      .sum(:amount)
+    // Voids from date
+    voids = SUM(
+        SELECT amount FROM transactions
+        WHERE transaction_type = 'void'
+        AND created_at BETWEEN date.start AND date.end
+    )
     
-    # Outstanding (should match holding account balance)
+    // Outstanding (should match holding account balance)
     outstanding = authorizations - settlements - voids
     holding_balance = holding_account.balance
     
     report = {
-      date: date,
-      authorizations: authorizations,
-      settlements: settlements,
-      voids: voids,
-      outstanding: outstanding,
-      holding_balance: holding_balance,
-      discrepancy: outstanding - holding_balance
+        date: date,
+        authorizations: authorizations,
+        settlements: settlements,
+        voids: voids,
+        outstanding: outstanding,
+        holding_balance: holding_balance,
+        discrepancy: outstanding - holding_balance
     }
     
-    # Alert if discrepancy
-    if report[:discrepancy] != 0
-      AlertService.notify(
-        "Holding account discrepancy: $#{report[:discrepancy]}",
-        level: :critical
-      )
-    end
+    // Alert if discrepancy
+    IF report.discrepancy != 0:
+        send_alert(
+            message: "Holding account discrepancy: $" + report.discrepancy,
+            level: 'critical'
+        )
+    END IF
     
-    report
-  end
-end
+    RETURN report
+END FUNCTION
 
-# Example output:
-# {
-#   date: 2024-11-29,
-#   authorizations: 2000000.00,  # $2M authorized
-#   settlements: 1950000.00,      # $1.95M settled
-#   voids: 4200.00,               # $4,200 voided
-#   outstanding: 45800.00,        # $45,800 still pending
-#   holding_balance: 45800.00,    # ✓ Matches!
-#   discrepancy: 0.00             # ✓ No issues
-# }
+// Example output:
+// {
+//   date: 2024-11-29,
+//   authorizations: 2000000.00,  // $2M authorized
+//   settlements: 1950000.00,      // $1.95M settled
+//   voids: 4200.00,               // $4,200 voided
+//   outstanding: 45800.00,        // $45,800 still pending
+//   holding_balance: 45800.00,    // ✓ Matches!
+//   discrepancy: 0.00             // ✓ No issues
+// }
 ```
 
 #### The Results
@@ -467,438 +475,423 @@ flowchart TD
     Settlement --> Balance
 ```
 
-### Rails Implementation
+### Implementation
 
 #### Step 1: Schema and Models
 
-```ruby
-# db/migrate/xxx_create_holding_accounts.rb
-class CreateHoldingAccounts < ActiveRecord::Migration[7.0]
-  def change
-    # Add holding account type to accounts
-    add_column :accounts, :is_holding_account, :boolean, default: false
-    add_index :accounts, :is_holding_account
-    
-    # Track fund movements
-    create_table :fund_movements do |t|
-      t.references :source_account, null: false, foreign_key: { to_table: :accounts }
-      t.references :destination_account, null: false, foreign_key: { to_table: :accounts }
-      t.references :ledger_transaction, null: false, foreign_key: true
-      t.decimal :amount, precision: 19, scale: 4, null: false
-      t.string :movement_type, null: false # 'authorization', 'settlement', 'refund', 'chargeback'
-      t.string :status, default: 'pending' # 'pending', 'completed', 'failed', 'reversed'
-      t.datetime :occurred_at
-      t.jsonb :metadata
-      t.timestamps
-      
-      t.index [:movement_type, :status]
-      t.index [:ledger_transaction_id, :movement_type]
-    end
-    
-    # Add settlement tracking to transactions
-    add_column :ledger_transactions, :holding_account_id, :bigint
-    add_foreign_key :ledger_transactions, :accounts, column: :holding_account_id
-    add_index :ledger_transactions, :holding_account_id
-  end
-end
+```sql
+-- Add holding account type to accounts
+ALTER TABLE accounts ADD COLUMN is_holding_account BOOLEAN DEFAULT false;
+CREATE INDEX idx_accounts_holding ON accounts(is_holding_account);
 
-# app/models/fund_movement.rb
-class FundMovement < ApplicationRecord
-  belongs_to :source_account, class_name: 'Account'
-  belongs_to :destination_account, class_name: 'Account'
-  belongs_to :ledger_transaction
-  
-  validates :amount, numericality: { greater_than: 0 }
-  validates :movement_type, inclusion: { in: %w[authorization settlement refund chargeback adjustment] }
-  validates :status, inclusion: { in: %w[pending completed failed reversed] }
-  
-  enum movement_type: {
-    authorization: 'authorization',
-    settlement: 'settlement',
-    refund: 'refund',
-    chargeback: 'chargeback',
-    adjustment: 'adjustment'
-  }
-  
-  scope :pending, -> { where(status: 'pending') }
-  scope :completed, -> { where(status: 'completed') }
-  scope :for_holding_account, ->(account_id) { 
-    where(source_account_id: account_id).or(where(destination_account_id: account_id)) 
-  }
-end
+-- Track fund movements
+CREATE TABLE fund_movements (
+    id BIGINT PRIMARY KEY,
+    source_account_id BIGINT NOT NULL REFERENCES accounts(id),
+    destination_account_id BIGINT NOT NULL REFERENCES accounts(id),
+    ledger_transaction_id BIGINT NOT NULL REFERENCES transactions(id),
+    amount DECIMAL(19,4) NOT NULL,
+    movement_type VARCHAR NOT NULL, -- 'authorization', 'settlement', 'refund', 'chargeback'
+    status VARCHAR DEFAULT 'pending', -- 'pending', 'completed', 'failed', 'reversed'
+    occurred_at TIMESTAMP,
+    metadata JSON,
+    created_at TIMESTAMP,
+    updated_at TIMESTAMP
+);
+
+CREATE INDEX idx_fund_movements_type_status ON fund_movements(movement_type, status);
+CREATE INDEX idx_fund_movements_transaction ON fund_movements(ledger_transaction_id, movement_type);
+
+-- Add settlement tracking to transactions
+ALTER TABLE transactions ADD COLUMN holding_account_id BIGINT REFERENCES accounts(id);
+CREATE INDEX idx_transactions_holding ON transactions(holding_account_id);
+```
+
+```
+Pseudocode: Fund Movement Model
+
+MODEL FundMovement:
+    FIELDS:
+        source_account: Reference to Account
+        destination_account: Reference to Account
+        ledger_transaction: Reference to Transaction
+        amount: Decimal (must be > 0)
+        movement_type: Enum ['authorization', 'settlement', 'refund', 'chargeback', 'adjustment']
+        status: Enum ['pending', 'completed', 'failed', 'reversed']
+    
+    VALIDATIONS:
+        amount must be greater than 0
+        movement_type must be valid enum value
+        status must be valid enum value
+    
+    QUERY SCOPES:
+        pending() -> Filter by status = 'pending'
+        completed() -> Filter by status = 'completed'
+        for_holding_account(account_id) -> Filter where source or destination is account_id
+END MODEL
 ```
 
 #### Step 2: Holding Account Service
 
-```ruby
-# app/services/ledger/holding_account_service.rb
-module Ledger
-  class HoldingAccountService
-    HOLDING_ACCOUNT_PREFIX = 'holding_'
+```
+Pseudocode: Holding Account Service
+
+SERVICE HoldingAccountService:
+    CONSTANT HOLDING_ACCOUNT_PREFIX = 'holding_'
     
-    # Get or create holding account for a currency
-    def self.get_holding_account(currency)
-      account_number = "#{HOLDING_ACCOUNT_PREFIX}#{currency.downcase}"
-      
-      Account.find_or_create_by!(account_number: account_number) do |account|
-        account.account_type = 'liability'
-        account.currency = currency.upcase
-        account.is_holding_account = true
-        account.status = 'active'
-        account.description = "Holding account for #{currency} unsettled funds"
-      end
-    end
+    // Get or create holding account for a currency
+    FUNCTION get_holding_account(currency):
+        account_number = HOLDING_ACCOUNT_PREFIX + LOWERCASE(currency)
+        
+        account = FIND account WHERE account_number = account_number
+        
+        IF account NOT EXISTS:
+            account = CREATE account(
+                account_number: account_number,
+                account_type: 'liability',
+                currency: UPPERCASE(currency),
+                is_holding_account: true,
+                status: 'active',
+                description: "Holding account for " + currency + " unsettled funds"
+            )
+        END IF
+        
+        RETURN account
+    END FUNCTION
     
-    # Move funds to holding (authorization)
-    def self.hold_funds(
-      from_account_id:, 
-      amount:, 
-      currency:, 
-      transaction:, 
-      metadata: {}
-    )
-      holding_account = get_holding_account(currency)
-      
-      ActiveRecord::Base.transaction do
-        # Create ledger entries
-        LedgerEntry.create!(
-          ledger_transaction: transaction,
-          account_id: from_account_id,
-          direction: 'debit',
-          amount: amount,
-          currency: currency,
-          description: "Hold funds: #{metadata[:reason] || 'Authorization'}"
-        )
+    // Move funds to holding (authorization)
+    FUNCTION hold_funds(from_account_id, amount, currency, transaction, metadata):
+        holding_account = get_holding_account(currency)
         
-        LedgerEntry.create!(
-          ledger_transaction: transaction,
-          account: holding_account,
-          direction: 'credit',
-          amount: amount,
-          currency: currency,
-          description: "Funds held from account #{from_account_id}"
-        )
+        BEGIN TRANSACTION
+            // Create ledger entries
+            create_ledger_entry(
+                transaction: transaction,
+                account_id: from_account_id,
+                direction: 'debit',
+                amount: amount,
+                currency: currency,
+                description: "Hold funds: " + metadata.reason OR 'Authorization'
+            )
+            
+            create_ledger_entry(
+                transaction: transaction,
+                account: holding_account,
+                direction: 'credit',
+                amount: amount,
+                currency: currency,
+                description: "Funds held from account " + from_account_id
+            )
+            
+            // Track the movement
+            create_fund_movement(
+                source_account_id: from_account_id,
+                destination_account: holding_account,
+                ledger_transaction: transaction,
+                amount: amount,
+                movement_type: 'authorization',
+                status: 'completed',
+                occurred_at: current_time(),
+                metadata: metadata
+            )
+            
+            // Update transaction reference
+            update_transaction(transaction, holding_account_id: holding_account.id)
+        COMMIT TRANSACTION
         
-        # Track the movement
-        FundMovement.create!(
-          source_account_id: from_account_id,
-          destination_account: holding_account,
-          ledger_transaction: transaction,
-          amount: amount,
-          movement_type: 'authorization',
-          status: 'completed',
-          occurred_at: Time.current,
-          metadata: metadata
-        )
-        
-        # Update transaction reference
-        transaction.update!(holding_account_id: holding_account.id)
-      end
-      
-      {
-        success: true,
-        holding_account_id: holding_account.id,
-        amount_held: amount
-      }
-    end
+        RETURN {
+            success: true,
+            holding_account_id: holding_account.id,
+            amount_held: amount
+        }
+    END FUNCTION
     
-    # Release funds from holding to final destination (settlement)
-    def self.release_funds(
-      holding_transaction:,
-      to_account_id:,
-      amount:,
-      fee_amount: 0,
-      metadata: {}
-    )
-      holding_account = Account.find(holding_transaction.holding_account_id)
-      currency = holding_transaction.ledger_entries.first.currency
-      
-      net_amount = amount - fee_amount
-      
-      ActiveRecord::Base.transaction do
-        # Create new settlement transaction
-        settlement_txn = LedgerTransaction.create!(
-          external_ref: "settlement:#{holding_transaction.external_ref}",
-          status: 'posted',
-          posted_at: Time.current,
-          parent_transaction: holding_transaction,
-          description: "Settlement for #{holding_transaction.external_ref}",
-          metadata: metadata.merge(
-            original_transaction_id: holding_transaction.id,
-            gross_amount: amount,
-            fee_amount: fee_amount,
-            net_amount: net_amount
-          )
-        )
+    // Release funds from holding to final destination (settlement)
+    FUNCTION release_funds(holding_transaction, to_account_id, amount, fee_amount, metadata):
+        holding_account = get_account(holding_transaction.holding_account_id)
+        currency = holding_transaction.ledger_entries[0].currency
         
-        # Debit holding account
-        LedgerEntry.create!(
-          ledger_transaction: settlement_txn,
-          account: holding_account,
-          direction: 'debit',
-          amount: amount,
-          currency: currency,
-          description: "Release held funds"
-        )
+        net_amount = amount - fee_amount
         
-        # Credit destination
-        LedgerEntry.create!(
-          ledger_transaction: settlement_txn,
-          account_id: to_account_id,
-          direction: 'credit',
-          amount: net_amount,
-          currency: currency,
-          description: "Settlement received"
-        )
+        BEGIN TRANSACTION
+            // Create new settlement transaction
+            settlement_txn = create_ledger_transaction(
+                external_ref: "settlement:" + holding_transaction.external_ref,
+                status: 'posted',
+                posted_at: current_time(),
+                parent_transaction: holding_transaction,
+                description: "Settlement for " + holding_transaction.external_ref,
+                metadata: {
+                    original_transaction_id: holding_transaction.id,
+                    gross_amount: amount,
+                    fee_amount: fee_amount,
+                    net_amount: net_amount
+                }
+            )
+            
+            // Debit holding account
+            create_ledger_entry(
+                ledger_transaction: settlement_txn,
+                account: holding_account,
+                direction: 'debit',
+                amount: amount,
+                currency: currency,
+                description: "Release held funds"
+            )
+            
+            // Credit destination
+            create_ledger_entry(
+                ledger_transaction: settlement_txn,
+                account_id: to_account_id,
+                direction: 'credit',
+                amount: net_amount,
+                currency: currency,
+                description: "Settlement received"
+            )
+            
+            // Credit fee account (if fees exist)
+            IF fee_amount > 0:
+                fee_account = get_account("expense_processor_fees")
+                create_ledger_entry(
+                    ledger_transaction: settlement_txn,
+                    account: fee_account,
+                    direction: 'credit',
+                    amount: fee_amount,
+                    currency: currency,
+                    description: "Processing fees"
+                )
+            END IF
+            
+            // Track movement
+            create_fund_movement(
+                source_account: holding_account,
+                destination_account_id: to_account_id,
+                ledger_transaction: settlement_txn,
+                amount: net_amount,
+                movement_type: 'settlement',
+                status: 'completed',
+                occurred_at: current_time(),
+                metadata: metadata
+            )
+            
+            // Mark original as settled
+            update_transaction(holding_transaction, 
+                settled_at: current_time(),
+                metadata: MERGE(holding_transaction.metadata, { settled: true })
+            )
+        COMMIT TRANSACTION
         
-        # Credit fee account (if fees exist)
-        if fee_amount > 0
-          fee_account = Account.find_by!(account_number: "expense_processor_fees")
-          LedgerEntry.create!(
-            ledger_transaction: settlement_txn,
-            account: fee_account,
-            direction: 'credit',
-            amount: fee_amount,
-            currency: currency,
-            description: "Processing fees"
-          )
-        end
-        
-        # Track movement
-        FundMovement.create!(
-          source_account: holding_account,
-          destination_account_id: to_account_id,
-          ledger_transaction: settlement_txn,
-          amount: net_amount,
-          movement_type: 'settlement',
-          status: 'completed',
-          occurred_at: Time.current,
-          metadata: metadata
-        )
-        
-        # Mark original as settled
-        holding_transaction.update!(
-          settled_at: Time.current,
-          metadata: holding_transaction.metadata.merge(settled: true)
-        )
-      end
-      
-      {
-        success: true,
-        settlement_transaction_id: settlement_txn.id,
-        net_amount: net_amount,
-        fee_amount: fee_amount
-      }
-    end
+        RETURN {
+            success: true,
+            settlement_transaction_id: settlement_txn.id,
+            net_amount: net_amount,
+            fee_amount: fee_amount
+        }
+    END FUNCTION
     
-    # Return held funds to source (void authorization)
-    def self.return_funds(
-      holding_transaction:,
-      reason: nil
-    )
-      holding_account = Account.find(holding_transaction.holding_account_id)
-      currency = holding_transaction.ledger_entries.first.currency
-      
-      # Find the original source account
-      original_entry = holding_transaction.ledger_entries.find_by(direction: 'debit')
-      source_account_id = original_entry.account_id
-      amount = original_entry.amount
-      
-      ActiveRecord::Base.transaction do
-        # Create reversal transaction
-        reversal_txn = LedgerTransaction.create!(
-          external_ref: "void:#{holding_transaction.external_ref}",
-          status: 'posted',
-          posted_at: Time.current,
-          parent_transaction: holding_transaction,
-          description: "Void: #{reason || 'Authorization cancelled'}",
-          metadata: { 
-            voided_transaction_id: holding_transaction.id,
-            void_reason: reason 
-          }
-        )
+    // Return held funds to source (void authorization)
+    FUNCTION return_funds(holding_transaction, reason):
+        holding_account = get_account(holding_transaction.holding_account_id)
+        currency = holding_transaction.ledger_entries[0].currency
         
-        # Debit holding (remove the hold)
-        LedgerEntry.create!(
-          ledger_transaction: reversal_txn,
-          account: holding_account,
-          direction: 'debit',
-          amount: amount,
-          currency: currency,
-          description: "Release hold back to source"
-        )
+        // Find the original source account
+        original_entry = FIND entry WHERE 
+            transaction = holding_transaction AND direction = 'debit'
+        source_account_id = original_entry.account_id
+        amount = original_entry.amount
         
-        # Credit source account
-        LedgerEntry.create!(
-          ledger_transaction: reversal_txn,
-          account_id: source_account_id,
-          direction: 'credit',
-          amount: amount,
-          currency: currency,
-          description: "Authorization voided"
-        )
+        BEGIN TRANSACTION
+            // Create reversal transaction
+            reversal_txn = create_ledger_transaction(
+                external_ref: "void:" + holding_transaction.external_ref,
+                status: 'posted',
+                posted_at: current_time(),
+                parent_transaction: holding_transaction,
+                description: "Void: " + reason OR 'Authorization cancelled',
+                metadata: { 
+                    voided_transaction_id: holding_transaction.id,
+                    void_reason: reason 
+                }
+            )
+            
+            // Debit holding (remove the hold)
+            create_ledger_entry(
+                ledger_transaction: reversal_txn,
+                account: holding_account,
+                direction: 'debit',
+                amount: amount,
+                currency: currency,
+                description: "Release hold back to source"
+            )
+            
+            // Credit source account
+            create_ledger_entry(
+                ledger_transaction: reversal_txn,
+                account_id: source_account_id,
+                direction: 'credit',
+                amount: amount,
+                currency: currency,
+                description: "Authorization voided"
+            )
+            
+            // Track movement
+            create_fund_movement(
+                source_account: holding_account,
+                destination_account_id: source_account_id,
+                ledger_transaction: reversal_txn,
+                amount: amount,
+                movement_type: 'refund',
+                status: 'completed',
+                occurred_at: current_time(),
+                metadata: { void_reason: reason }
+            )
+            
+            // Mark original as reversed
+            transition_transaction(holding_transaction, 'reversed')
+        COMMIT TRANSACTION
         
-        # Track movement
-        FundMovement.create!(
-          source_account: holding_account,
-          destination_account_id: source_account_id,
-          ledger_transaction: reversal_txn,
-          amount: amount,
-          movement_type: 'refund',
-          status: 'completed',
-          occurred_at: Time.current,
-          metadata: { void_reason: reason }
-        )
-        
-        # Mark original as reversed
-        holding_transaction.transition_to!('reversed')
-      end
-      
-      { success: true, reversal_transaction_id: reversal_txn.id }
-    end
+        RETURN { success: true, reversal_transaction_id: reversal_txn.id }
+    END FUNCTION
     
-    # Get current holdings summary
-    def self.holdings_summary(currency: nil)
-      scope = FundMovement.where(status: 'completed')
-      scope = scope.joins(:ledger_transaction).where(ledger_transactions: { currency: currency }) if currency
-      
-      {
-        total_authorized: scope.where(movement_type: 'authorization').sum(:amount),
-        total_settled: scope.where(movement_type: 'settlement').sum(:amount),
-        total_refunded: scope.where(movement_type: 'refund').sum(:amount),
-        total_chargebacks: scope.where(movement_type: 'chargeback').sum(:amount),
-        net_outstanding: scope.where(movement_type: 'authorization').sum(:amount) - 
-                        scope.where(movement_type: ['settlement', 'refund', 'chargeback']).sum(:amount)
-      }
-    end
+    // Get current holdings summary
+    FUNCTION holdings_summary(currency):
+        scope = fund_movements WHERE status = 'completed'
+        
+        IF currency PROVIDED:
+            scope = scope WHERE transactions.currency = currency
+        END IF
+        
+        RETURN {
+            total_authorized: SUM(scope WHERE movement_type = 'authorization'),
+            total_settled: SUM(scope WHERE movement_type = 'settlement'),
+            total_refunded: SUM(scope WHERE movement_type = 'refund'),
+            total_chargebacks: SUM(scope WHERE movement_type = 'chargeback'),
+            net_outstanding: SUM(authorization) - SUM(settlement + refund + chargeback)
+        }
+    END FUNCTION
     
-    # Find stale holdings (authorized but not settled)
-    def self.stale_holdings(older_than: 7.days)
-      FundMovement
-        .where(movement_type: 'authorization')
-        .where(status: 'completed')
-        .where('created_at < ?', older_than.ago)
-        .where.not(
-          ledger_transaction_id: FundMovement
-            .where(movement_type: ['settlement', 'refund'])
-            .select(:ledger_transaction_id)
-        )
-        .includes(:ledger_transaction)
-    end
-  end
-end
+    // Find stale holdings (authorized but not settled)
+    FUNCTION stale_holdings(older_than):
+        RETURN fund_movements WHERE
+            movement_type = 'authorization' AND
+            status = 'completed' AND
+            created_at < (current_time() - older_than) AND
+            ledger_transaction_id NOT IN (
+                SELECT ledger_transaction_id FROM fund_movements
+                WHERE movement_type IN ['settlement', 'refund']
+            )
+    END FUNCTION
+END SERVICE
 ```
 
 #### Step 3: Usage Examples
 
-```ruby
-# Example 1: Complete authorization and settlement flow
-class PaymentWithHoldingService
-  def self.process_payment(payment_params)
-    # Step 1: Authorize with processor
-    authorization = Stripe::Authorization.create(
-      amount: payment_params[:amount],
-      currency: payment_params[:currency],
-      payment_method: payment_params[:payment_method_id]
-    )
-    
-    # Step 2: Hold funds in ledger
-    hold_transaction = LedgerTransaction.create!(
-      external_ref: authorization.id,
-      status: 'posted',
-      transaction_phase: 'authorization',
-      description: "Authorization for order #{payment_params[:order_id]}"
-    )
-    
-    # Create the entries
-    Ledger::HoldingAccountService.hold_funds(
-      from_account_id: payment_params[:customer_account_id],
-      amount: payment_params[:amount],
-      currency: payment_params[:currency],
-      transaction: hold_transaction,
-      metadata: {
-        order_id: payment_params[:order_id],
-        customer_id: payment_params[:customer_id],
-        authorization_id: authorization.id
-      }
-    )
-    
-    # Step 3: Later, settle the funds (could be async via webhook)
-    settlement = Stripe::Charge.capture(authorization.id)
-    
-    fee_amount = calculate_stripe_fee(payment_params[:amount])
-    
-    Ledger::HoldingAccountService.release_funds(
-      holding_transaction: hold_transaction,
-      to_account_id: payment_params[:merchant_account_id],
-      amount: payment_params[:amount],
-      fee_amount: fee_amount,
-      metadata: {
-        settlement_id: settlement.id,
-        order_id: payment_params[:order_id]
-      }
-    )
-    
-    {
-      success: true,
-      authorization_id: authorization.id,
-      net_amount: payment_params[:amount] - fee_amount
-    }
-  end
-  
-  def self.void_authorization(authorization_id, reason: nil)
-    hold_transaction = LedgerTransaction.find_by!(
-      external_ref: authorization_id,
-      transaction_phase: 'authorization'
-    )
-    
-    # Void with Stripe
-    Stripe::Authorization.void(authorization_id)
-    
-    # Return funds to customer
-    Ledger::HoldingAccountService.return_funds(
-      holding_transaction: hold_transaction,
-      reason: reason
-    )
-  end
-  
-  private
-  
-  def self.calculate_stripe_fee(amount)
-    (amount * 0.029 + 0.30).round(2)
-  end
-end
+```
+Pseudocode: Payment Service with Holding Accounts
 
-# Example 2: Monitoring holdings
-class HoldingsMonitor
-  def self.daily_report
-    summary = Ledger::HoldingAccountService.holdings_summary
-    stale = Ledger::HoldingAccountService.stale_holdings(older_than: 3.days)
+SERVICE PaymentWithHoldingService:
+    FUNCTION process_payment(payment_params):
+        // Step 1: Authorize with processor
+        authorization = payment_processor.authorize(
+            amount: payment_params.amount,
+            currency: payment_params.currency,
+            payment_method: payment_params.payment_method_id
+        )
+        
+        // Step 2: Hold funds in ledger
+        hold_transaction = create_ledger_transaction(
+            external_ref: authorization.id,
+            status: 'posted',
+            transaction_phase: 'authorization',
+            description: "Authorization for order " + payment_params.order_id
+        )
+        
+        // Create the entries
+        HoldingAccountService.hold_funds(
+            from_account_id: payment_params.customer_account_id,
+            amount: payment_params.amount,
+            currency: payment_params.currency,
+            transaction: hold_transaction,
+            metadata: {
+                order_id: payment_params.order_id,
+                customer_id: payment_params.customer_id,
+                authorization_id: authorization.id
+            }
+        )
+        
+        // Step 3: Later, settle the funds (could be async via webhook)
+        settlement = payment_processor.capture(authorization.id)
+        
+        fee_amount = calculate_stripe_fee(payment_params.amount)
+        
+        HoldingAccountService.release_funds(
+            holding_transaction: hold_transaction,
+            to_account_id: payment_params.merchant_account_id,
+            amount: payment_params.amount,
+            fee_amount: fee_amount,
+            metadata: {
+                settlement_id: settlement.id,
+                order_id: payment_params.order_id
+            }
+        )
+        
+        RETURN {
+            success: true,
+            authorization_id: authorization.id,
+            net_amount: payment_params.amount - fee_amount
+        }
+    END FUNCTION
     
-    {
-      summary: summary,
-      stale_count: stale.count,
-      stale_amount: stale.sum(:amount),
-      alerts: generate_alerts(summary, stale)
-    }
-  end
-  
-  def self.generate_alerts(summary, stale)
-    alerts = []
+    FUNCTION void_authorization(authorization_id, reason):
+        hold_transaction = FIND transaction WHERE
+            external_ref = authorization_id AND
+            transaction_phase = 'authorization'
+        
+        // Void with processor
+        payment_processor.void(authorization_id)
+        
+        // Return funds to customer
+        HoldingAccountService.return_funds(
+            holding_transaction: hold_transaction,
+            reason: reason
+        )
+    END FUNCTION
     
-    # Alert if outstanding > threshold
-    if summary[:net_outstanding] > 1_000_000
-      alerts << "High outstanding holdings: $#{summary[:net_outstanding]}"
-    end
+    PRIVATE FUNCTION calculate_stripe_fee(amount):
+        RETURN ROUND(amount * 0.029 + 0.30, 2)
+    END FUNCTION
+END SERVICE
+
+// Example 2: Monitoring holdings
+SERVICE HoldingsMonitor:
+    FUNCTION daily_report():
+        summary = HoldingAccountService.holdings_summary()
+        stale = HoldingAccountService.stale_holdings(older_than: 3 days)
+        
+        RETURN {
+            summary: summary,
+            stale_count: COUNT(stale),
+            stale_amount: SUM(stale.amount),
+            alerts: generate_alerts(summary, stale)
+        }
+    END FUNCTION
     
-    # Alert on stale holdings
-    if stale.any?
-      alerts << "#{stale.count} stale holdings over 3 days old"
-    end
-    
-    alerts
-  end
-end
+    FUNCTION generate_alerts(summary, stale):
+        alerts = []
+        
+        // Alert if outstanding > threshold
+        IF summary.net_outstanding > 1,000,000:
+            alerts.ADD("High outstanding holdings: $" + summary.net_outstanding)
+        END IF
+        
+        // Alert on stale holdings
+        IF COUNT(stale) > 0:
+            alerts.ADD(COUNT(stale) + " stale holdings over 3 days old")
+        END IF
+        
+        RETURN alerts
+    END FUNCTION
+END SERVICE
 ```
 
 ### Key Takeaways
@@ -1003,614 +996,587 @@ flowchart TB
     API --> Escalate
 ```
 
-### Rails Implementation: Real-Time Anomaly API
+### Implementation: Real-Time Anomaly Detection
 
 #### Step 1: Database Schema for Real-Time Tracking
 
-```ruby
-# db/migrate/xxx_create_real_time_anomaly_tables.rb
-class CreateRealTimeAnomalyTables < ActiveRecord::Migration[7.0]
-  def change
-    # Track transaction events for streaming
-    create_table :transaction_events do |t|
-      t.references :ledger_transaction, null: false, foreign_key: true
-      t.string :event_type, null: false # 'created', 'status_changed', 'posted'
-      t.string :from_status
-      t.string :to_status
-      t.jsonb :event_data
-      t.datetime :occurred_at, null: false
-      t.timestamps
-      
-      t.index [:ledger_transaction_id, :occurred_at]
-      t.index [:event_type, :occurred_at]
-    end
-    
-    # Real-time anomaly detections
-    create_table :anomaly_detections do |t|
-      t.references :ledger_transaction, null: false, foreign_key: true
-      t.string :anomaly_type, null: false
-      t.string :severity, null: false # 'low', 'medium', 'high', 'critical'
-      t.decimal :risk_score, precision: 5, scale: 2 # 0.00 to 100.00
-      t.jsonb :details
-      t.string :status, default: 'open' # 'open', 'investigating', 'resolved', 'false_positive'
-      t.bigint :detected_by_id # User who reviewed
-      t.text :resolution_notes
-      t.datetime :resolved_at
-      t.timestamps
-      
-      t.index [:anomaly_type, :status]
-      t.index [:severity, :created_at]
-      t.index :risk_score
-    end
-    
-    # Sliding window statistics for real-time analysis
-    create_table :window_statistics do |t|
-      t.references :account, null: false, foreign_key: true
-      t.string :window_type, null: false # '1_minute', '5_minute', '1_hour'
-      t.datetime :window_start, null: false
-      t.integer :transaction_count, default: 0
-      t.decimal :total_amount, precision: 19, scale: 4, default: 0
-      t.decimal :avg_amount, precision: 19, scale: 4
-      t.decimal :max_amount, precision: 19, scale: 4
-      t.jsonb :velocity_metrics
-      t.timestamps
-      
-      t.index [:account_id, :window_type, :window_start]
-    end
-  end
-end
+```sql
+-- Track transaction events for streaming
+CREATE TABLE transaction_events (
+    id BIGINT PRIMARY KEY,
+    ledger_transaction_id BIGINT NOT NULL REFERENCES transactions(id),
+    event_type VARCHAR NOT NULL, -- 'created', 'status_changed', 'posted'
+    from_status VARCHAR,
+    to_status VARCHAR,
+    event_data JSON,
+    occurred_at TIMESTAMP NOT NULL,
+    created_at TIMESTAMP,
+    updated_at TIMESTAMP
+);
+
+CREATE INDEX idx_transaction_events_transaction ON transaction_events(ledger_transaction_id, occurred_at);
+CREATE INDEX idx_transaction_events_type ON transaction_events(event_type, occurred_at);
+
+-- Real-time anomaly detections
+CREATE TABLE anomaly_detections (
+    id BIGINT PRIMARY KEY,
+    ledger_transaction_id BIGINT NOT NULL REFERENCES transactions(id),
+    anomaly_type VARCHAR NOT NULL,
+    severity VARCHAR NOT NULL, -- 'low', 'medium', 'high', 'critical'
+    risk_score DECIMAL(5,2), -- 0.00 to 100.00
+    details JSON,
+    status VARCHAR DEFAULT 'open', -- 'open', 'investigating', 'resolved', 'false_positive'
+    detected_by_id BIGINT, -- User who reviewed
+    resolution_notes TEXT,
+    resolved_at TIMESTAMP,
+    created_at TIMESTAMP,
+    updated_at TIMESTAMP
+);
+
+CREATE INDEX idx_anomalies_type_status ON anomaly_detections(anomaly_type, status);
+CREATE INDEX idx_anomalies_severity ON anomaly_detections(severity, created_at);
+CREATE INDEX idx_anomalies_score ON anomaly_detections(risk_score);
+
+-- Sliding window statistics for real-time analysis
+CREATE TABLE window_statistics (
+    id BIGINT PRIMARY KEY,
+    account_id BIGINT NOT NULL REFERENCES accounts(id),
+    window_type VARCHAR NOT NULL, -- '1_minute', '5_minute', '1_hour'
+    window_start TIMESTAMP NOT NULL,
+    transaction_count INTEGER DEFAULT 0,
+    total_amount DECIMAL(19,4) DEFAULT 0,
+    avg_amount DECIMAL(19,4),
+    max_amount DECIMAL(19,4),
+    velocity_metrics JSON,
+    created_at TIMESTAMP,
+    updated_at TIMESTAMP
+);
+
+CREATE INDEX idx_window_stats_account ON window_statistics(account_id, window_type, window_start);
 ```
 
 #### Step 2: Real-Time Anomaly Detection Service
 
-```ruby
-# app/services/realtime/anomaly_detection_service.rb
-module Realtime
-  class AnomalyDetectionService
-    VELOCITY_THRESHOLD = 10 # transactions per minute
-    AMOUNT_DEVIATION_THRESHOLD = 3.0 # standard deviations
-    ROUND_NUMBER_THRESHOLD = 0.8 # 80% round numbers
+```
+Pseudocode: Real-Time Anomaly Detection Service
+
+SERVICE AnomalyDetectionService:
+    CONSTANT VELOCITY_THRESHOLD = 10 // transactions per minute
+    CONSTANT AMOUNT_DEVIATION_THRESHOLD = 3.0 // standard deviations
+    CONSTANT ROUND_NUMBER_THRESHOLD = 0.8 // 80% round numbers
     
-    def initialize(transaction)
-      @transaction = transaction
-      @anomalies = []
-    end
+    FUNCTION init(transaction):
+        this.transaction = transaction
+        this.anomalies = []
+    END FUNCTION
     
-    # Main entry point - analyze transaction in real-time
-    def analyze!
-      Rails.logger.info "Analyzing transaction #{@transaction.id} for anomalies"
-      
-      # Run all detection checks
-      check_velocity_anomaly
-      check_amount_anomaly
-      check_round_number_pattern
-      check_rapid_state_transitions
-      check_off_hours_activity
-      check_geographic_anomaly
-      check_balance_consistency
-      
-      # Store detections
-      store_anomalies
-      
-      # Return summary
-      {
-        transaction_id: @transaction.id,
-        anomalies_found: @anomalies.count,
-        max_severity: @anomalies.map { |a| a[:severity] }.max || 'none',
-        risk_score: calculate_overall_risk_score,
-        details: @anomalies
-      }
-    end
+    // Main entry point - analyze transaction in real-time
+    FUNCTION analyze():
+        log("Analyzing transaction " + transaction.id + " for anomalies")
+        
+        // Run all detection checks
+        check_velocity_anomaly()
+        check_amount_anomaly()
+        check_round_number_pattern()
+        check_rapid_state_transitions()
+        check_off_hours_activity()
+        check_geographic_anomaly()
+        check_balance_consistency()
+        
+        // Store detections
+        store_anomalies()
+        
+        // Return summary
+        RETURN {
+            transaction_id: transaction.id,
+            anomalies_found: COUNT(this.anomalies),
+            max_severity: MAX(this.anomalies.severity) OR 'none',
+            risk_score: calculate_overall_risk_score(),
+            details: this.anomalies
+        }
+    END FUNCTION
     
-    private
-    
-    # Check 1: Velocity - Too many transactions too fast
-    def check_velocity_anomaly
-      account_id = @transaction.ledger_entries.first&.account_id
-      return unless account_id
-      
-      # Count transactions in last minute
-      recent_count = TransactionEvent
-        .where(event_type: 'created')
-        .where('occurred_at > ?', 1.minute.ago)
-        .where(
-          ledger_transaction_id: LedgerTransaction
-            .joins(:ledger_entries)
-            .where(ledger_entries: { account_id: account_id })
-            .select(:id)
+    // Check 1: Velocity - Too many transactions too fast
+    PRIVATE FUNCTION check_velocity_anomaly():
+        account_id = transaction.ledger_entries[0].account_id
+        IF account_id IS NULL: RETURN
+        
+        // Count transactions in last minute
+        recent_count = COUNT(
+            SELECT * FROM transaction_events
+            WHERE event_type = 'created'
+            AND occurred_at > (current_time() - 1 minute)
+            AND ledger_transaction_id IN (
+                SELECT id FROM transactions
+                JOIN ledger_entries ON transactions.id = ledger_entries.transaction_id
+                WHERE ledger_entries.account_id = account_id
+            )
         )
-        .count
-      
-      if recent_count > VELOCITY_THRESHOLD
-        @anomalies << {
-          type: 'velocity_anomaly',
-          severity: recent_count > VELOCITY_THRESHOLD * 2 ? 'critical' : 'high',
-          risk_score: [recent_count * 5, 100].min,
-          details: {
-            transactions_in_last_minute: recent_count,
-            threshold: VELOCITY_THRESHOLD,
-            account_id: account_id
-          },
-          description: "#{recent_count} transactions in last minute (threshold: #{VELOCITY_THRESHOLD})"
-        }
-      end
-    end
-    
-    # Check 2: Amount - Unusually large amount
-    def check_amount_anomaly
-      account_id = @transaction.ledger_entries.first&.account_id
-      return unless account_id
-      
-      # Get amount
-      amount = @transaction.ledger_entries.sum(:amount)
-      
-      # Calculate historical statistics
-      stats = WindowStatistics
-        .where(account_id: account_id)
-        .where(window_type: '1_hour')
-        .where('window_start > ?', 30.days.ago)
-        .select('AVG(avg_amount) as historical_avg, STDDEV(avg_amount) as historical_stddev')
-        .first
-      
-      return unless stats.historical_avg && stats.historical_stddev
-      
-      # Calculate z-score
-      z_score = (amount - stats.historical_avg.to_f) / stats.historical_stddev.to_f
-      
-      if z_score > AMOUNT_DEVIATION_THRESHOLD
-        @anomalies << {
-          type: 'amount_anomaly',
-          severity: z_score > AMOUNT_DEVIATION_THRESHOLD * 2 ? 'critical' : 'high',
-          risk_score: [z_score * 15, 100].min,
-          details: {
-            amount: amount,
-            historical_avg: stats.historical_avg,
-            z_score: z_score.round(2)
-          },
-          description: "Amount $#{amount} is #{z_score.round(2)} standard deviations above average"
-        }
-      end
-    end
-    
-    # Check 3: Round numbers - Suspicious pattern
-    def check_round_number_pattern
-      entries = @transaction.ledger_entries
-      
-      round_count = entries.count do |entry|
-        entry.amount > 100 && entry.amount % 100 == 0
-      end
-      
-      total_entries = entries.count
-      
-      if total_entries > 0 && (round_count.to_f / total_entries) > ROUND_NUMBER_THRESHOLD
-        @anomalies << {
-          type: 'round_number_pattern',
-          severity: 'medium',
-          risk_score: 60,
-          details: {
-            round_amounts: round_count,
-            total_entries: total_entries,
-            percentage: ((round_count.to_f / total_entries) * 100).round(2)
-          },
-          description: "#{round_count}/#{total_entries} entries are suspiciously round numbers"
-        }
-      end
-    end
-    
-    # Check 4: Rapid state changes - Potential bug
-    def check_rapid_state_transitions
-      transitions = StateTransition
-        .where(ledger_transaction: @transaction)
-        .order(created_at: :asc)
-      
-      return if transitions.count < 2
-      
-      # Check if multiple transitions happened within 10 seconds
-      transitions.each_cons(2) do |prev, curr|
-        time_diff = curr.created_at - prev.created_at
         
-        if time_diff < 10.seconds
-          @anomalies << {
-            type: 'rapid_state_transition',
-            severity: 'high',
-            risk_score: 85,
-            details: {
-              from_state: prev.from_status,
-              to_state: curr.to_status,
-              time_difference_seconds: time_diff.round(2)
-            },
-            description: "State changed from #{prev.from_status} to #{curr.to_status} in #{time_diff.round(2)}s"
-          }
-        end
-      end
-    end
+        IF recent_count > VELOCITY_THRESHOLD:
+            severity = IF recent_count > VELOCITY_THRESHOLD * 2 THEN 'critical' ELSE 'high'
+            ADD anomaly {
+                type: 'velocity_anomaly',
+                severity: severity,
+                risk_score: MIN(recent_count * 5, 100),
+                details: {
+                    transactions_in_last_minute: recent_count,
+                    threshold: VELOCITY_THRESHOLD,
+                    account_id: account_id
+                },
+                description: recent_count + " transactions in last minute (threshold: " + VELOCITY_THRESHOLD + ")"
+            }
+        END IF
+    END FUNCTION
     
-    # Check 5: Off-hours activity
-    def check_off_hours_activity
-      posted_at = @transaction.posted_at || Time.current
-      account_id = @transaction.ledger_entries.first&.account_id
-      
-      return unless account_id
-      
-      # Check if transaction is outside business hours (9 AM - 6 PM)
-      hour = posted_at.hour
-      is_business_hours = hour >= 9 && hour < 18
-      
-      # Check historical pattern for this account
-      historical_hours = LedgerTransaction
-        .joins(:ledger_entries)
-        .where(ledger_entries: { account_id: account_id })
-        .where.not(id: @transaction.id)
-        .where('posted_at > ?', 90.days.ago)
-        .group("EXTRACT(HOUR FROM posted_at)")
-        .count
-      
-      # If account never transacts during this hour
-      current_hour_transactions = historical_hours[hour] || 0
-      total_transactions = historical_hours.values.sum
-      
-      if total_transactions > 10 && current_hour_transactions == 0 && !is_business_hours
-        @anomalies << {
-          type: 'off_hours_activity',
-          severity: 'medium',
-          risk_score: 55,
-          details: {
-            transaction_hour: hour,
-            is_business_hours: is_business_hours,
-            historical_transactions_this_hour: current_hour_transactions
-          },
-          description: "Transaction at #{hour}:00 - account never transacts during this hour"
-        }
-      end
-    end
-    
-    # Check 6: Geographic anomaly (if IP tracking enabled)
-    def check_geographic_anomaly
-      return unless @transaction.metadata&.dig('ip_address')
-      
-      ip = @transaction.metadata['ip_address']
-      account_id = @transaction.ledger_entries.first&.account_id
-      
-      # Get country from IP (simplified - use GeoIP in production)
-      current_country = ip_country_lookup(ip)
-      
-      # Get historical countries for this account
-      historical_countries = LedgerTransaction
-        .joins(:ledger_entries)
-        .where(ledger_entries: { account_id: account_id })
-        .where.not(id: @transaction.id)
-        .where('created_at > ?', 30.days.ago)
-        .pluck(Arel.sql("metadata->>'country'"))
-        .compact
-        .uniq
-      
-      if historical_countries.any? && !historical_countries.include?(current_country)
-        @anomalies << {
-          type: 'geographic_anomaly',
-          severity: 'high',
-          risk_score: 75,
-          details: {
-            current_country: current_country,
-            historical_countries: historical_countries,
-            ip_address: ip
-          },
-          description: "Transaction from #{current_country} - account usually transacts from #{historical_countries.join(', ')}"
-        }
-      end
-    end
-    
-    # Check 7: Balance consistency
-    def check_balance_consistency
-      @transaction.ledger_entries.each do |entry|
-        account = entry.account
+    // Check 2: Amount - Unusually large amount
+    PRIVATE FUNCTION check_amount_anomaly():
+        account_id = transaction.ledger_entries[0].account_id
+        IF account_id IS NULL: RETURN
         
-        # Calculate expected balance after this transaction
-        expected_balance = if entry.direction == 'credit'
-          account.balance - entry.amount
-        else
-          account.balance + entry.amount
-        end
+        // Get amount
+        amount = SUM(transaction.ledger_entries.amount)
         
-        # Get sum of all entries for this account
-        calculated_balance = LedgerEntry
-          .joins(:ledger_transaction)
-          .where(account: account)
-          .where(ledger_transactions: { status: 'posted' })
-          .where('ledger_transactions.posted_at <= ?', @transaction.posted_at)
-          .sum("CASE WHEN direction = 'credit' THEN amount ELSE -amount END")
+        // Calculate historical statistics
+        stats = SELECT 
+            AVG(avg_amount) as historical_avg,
+            STDDEV(avg_amount) as historical_stddev
+        FROM window_statistics
+        WHERE account_id = account_id
+        AND window_type = '1_hour'
+        AND window_start > (current_time() - 30 days)
         
-        if (expected_balance - calculated_balance).abs > 0.01
-          @anomalies << {
-            type: 'balance_inconsistency',
-            severity: 'critical',
-            risk_score: 100,
-            details: {
-              account_id: account.id,
-              expected_balance: expected_balance,
-              calculated_balance: calculated_balance,
-              difference: (expected_balance - calculated_balance).round(2)
-            },
-            description: "CRITICAL: Balance drift detected in account #{account.account_number}"
-          }
-        end
-      end
-    end
+        IF stats.historical_avg IS NULL OR stats.historical_stddev IS NULL: RETURN
+        
+        // Calculate z-score
+        z_score = (amount - stats.historical_avg) / stats.historical_stddev
+        
+        IF z_score > AMOUNT_DEVIATION_THRESHOLD:
+            severity = IF z_score > AMOUNT_DEVIATION_THRESHOLD * 2 THEN 'critical' ELSE 'high'
+            ADD anomaly {
+                type: 'amount_anomaly',
+                severity: severity,
+                risk_score: MIN(z_score * 15, 100),
+                details: {
+                    amount: amount,
+                    historical_avg: stats.historical_avg,
+                    z_score: ROUND(z_score, 2)
+                },
+                description: "Amount $" + amount + " is " + ROUND(z_score, 2) + " standard deviations above average"
+            }
+        END IF
+    END FUNCTION
     
-    def store_anomalies
-      @anomalies.each do |anomaly|
-        AnomalyDetection.create!(
-          ledger_transaction: @transaction,
-          anomaly_type: anomaly[:type],
-          severity: anomaly[:severity],
-          risk_score: anomaly[:risk_score],
-          details: anomaly[:details],
-          status: anomaly[:severity] == 'critical' ? 'open' : 'investigating'
-        )
-      end
-    end
+    // Check 3: Round numbers - Suspicious pattern
+    PRIVATE FUNCTION check_round_number_pattern():
+        entries = transaction.ledger_entries
+        
+        round_count = COUNT(entries WHERE amount > 100 AND amount % 100 == 0)
+        total_entries = COUNT(entries)
+        
+        IF total_entries > 0 AND (round_count / total_entries) > ROUND_NUMBER_THRESHOLD:
+            ADD anomaly {
+                type: 'round_number_pattern',
+                severity: 'medium',
+                risk_score: 60,
+                details: {
+                    round_amounts: round_count,
+                    total_entries: total_entries,
+                    percentage: ROUND((round_count / total_entries) * 100, 2)
+                },
+                description: round_count + "/" + total_entries + " entries are suspiciously round numbers"
+            }
+        END IF
+    END FUNCTION
     
-    def calculate_overall_risk_score
-      return 0 if @anomalies.empty?
-      
-      # Weighted average based on severity
-      weights = { 'critical' => 1.0, 'high' => 0.7, 'medium' => 0.4, 'low' => 0.2 }
-      
-      total_weight = @anomalies.sum { |a| weights[a[:severity]] || 0.1 }
-      weighted_score = @anomalies.sum { |a| a[:risk_score] * (weights[a[:severity]] || 0.1) }
-      
-      (weighted_score / total_weight).round(2)
-    end
+    // Check 4: Rapid state changes - Potential bug
+    PRIVATE FUNCTION check_rapid_state_transitions():
+        transitions = SELECT * FROM state_transitions
+        WHERE transaction_id = transaction.id
+        ORDER BY created_at ASC
+        
+        IF COUNT(transitions) < 2: RETURN
+        
+        // Check if multiple transitions happened within 10 seconds
+        FOR EACH prev, curr IN PAIRS(transitions):
+            time_diff = curr.created_at - prev.created_at
+            
+            IF time_diff < 10 seconds:
+                ADD anomaly {
+                    type: 'rapid_state_transition',
+                    severity: 'high',
+                    risk_score: 85,
+                    details: {
+                        from_state: prev.from_status,
+                        to_state: curr.to_status,
+                        time_difference_seconds: ROUND(time_diff, 2)
+                    },
+                    description: "State changed from " + prev.from_status + " to " + curr.to_status + " in " + ROUND(time_diff, 2) + "s"
+                }
+            END IF
+        END FOR
+    END FUNCTION
     
-    def ip_country_lookup(ip)
-      # In production, use GeoIP2 or similar
-      # This is a simplified example
-      require 'resolv'
-      # Return country code based on IP
-      'US' # Placeholder
-    end
-  end
-end
+    // Check 5: Off-hours activity
+    PRIVATE FUNCTION check_off_hours_activity():
+        posted_at = transaction.posted_at OR current_time()
+        account_id = transaction.ledger_entries[0].account_id
+        
+        IF account_id IS NULL: RETURN
+        
+        // Check if transaction is outside business hours (9 AM - 6 PM)
+        hour = EXTRACT_HOUR(posted_at)
+        is_business_hours = hour >= 9 AND hour < 18
+        
+        // Check historical pattern for this account
+        historical_hours = SELECT 
+            EXTRACT_HOUR(posted_at) as hour,
+            COUNT(*) as count
+        FROM transactions
+        JOIN ledger_entries ON transactions.id = ledger_entries.transaction_id
+        WHERE ledger_entries.account_id = account_id
+        AND transactions.id != transaction.id
+        AND posted_at > (current_time() - 90 days)
+        GROUP BY EXTRACT_HOUR(posted_at)
+        
+        // If account never transacts during this hour
+        current_hour_transactions = historical_hours[hour] OR 0
+        total_transactions = SUM(historical_hours.count)
+        
+        IF total_transactions > 10 AND current_hour_transactions == 0 AND NOT is_business_hours:
+            ADD anomaly {
+                type: 'off_hours_activity',
+                severity: 'medium',
+                risk_score: 55,
+                details: {
+                    transaction_hour: hour,
+                    is_business_hours: is_business_hours,
+                    historical_transactions_this_hour: current_hour_transactions
+                },
+                description: "Transaction at " + hour + ":00 - account never transacts during this hour"
+            }
+        END IF
+    END FUNCTION
+    
+    // Check 6: Geographic anomaly (if IP tracking enabled)
+    PRIVATE FUNCTION check_geographic_anomaly():
+        IF transaction.metadata.ip_address IS NULL: RETURN
+        
+        ip = transaction.metadata.ip_address
+        account_id = transaction.ledger_entries[0].account_id
+        
+        // Get country from IP (simplified - use GeoIP in production)
+        current_country = ip_country_lookup(ip)
+        
+        // Get historical countries for this account
+        historical_countries = SELECT DISTINCT metadata->>'country'
+        FROM transactions
+        JOIN ledger_entries ON transactions.id = ledger_entries.transaction_id
+        WHERE ledger_entries.account_id = account_id
+        AND transactions.id != transaction.id
+        AND created_at > (current_time() - 30 days)
+        
+        IF COUNT(historical_countries) > 0 AND current_country NOT IN historical_countries:
+            ADD anomaly {
+                type: 'geographic_anomaly',
+                severity: 'high',
+                risk_score: 75,
+                details: {
+                    current_country: current_country,
+                    historical_countries: historical_countries,
+                    ip_address: ip
+                },
+                description: "Transaction from " + current_country + " - account usually transacts from " + JOIN(historical_countries, ', ')
+            }
+        END IF
+    END FUNCTION
+    
+    // Check 7: Balance consistency
+    PRIVATE FUNCTION check_balance_consistency():
+        FOR EACH entry IN transaction.ledger_entries:
+            account = entry.account
+            
+            // Calculate expected balance after this transaction
+            IF entry.direction == 'credit':
+                expected_balance = account.balance - entry.amount
+            ELSE:
+                expected_balance = account.balance + entry.amount
+            END IF
+            
+            // Get sum of all entries for this account
+            calculated_balance = SELECT SUM(
+                CASE WHEN direction = 'credit' THEN amount ELSE -amount END
+            )
+            FROM ledger_entries
+            JOIN transactions ON ledger_entries.transaction_id = transactions.id
+            WHERE account_id = account.id
+            AND transactions.status = 'posted'
+            AND transactions.posted_at <= transaction.posted_at
+            
+            IF ABS(expected_balance - calculated_balance) > 0.01:
+                ADD anomaly {
+                    type: 'balance_inconsistency',
+                    severity: 'critical',
+                    risk_score: 100,
+                    details: {
+                        account_id: account.id,
+                        expected_balance: expected_balance,
+                        calculated_balance: calculated_balance,
+                        difference: ROUND(expected_balance - calculated_balance, 2)
+                    },
+                    description: "CRITICAL: Balance drift detected in account " + account.account_number
+                }
+            END IF
+        END FOR
+    END FUNCTION
+    
+    PRIVATE FUNCTION store_anomalies():
+        FOR EACH anomaly IN this.anomalies:
+            CREATE anomaly_detection(
+                transaction: transaction,
+                anomaly_type: anomaly.type,
+                severity: anomaly.severity,
+                risk_score: anomaly.risk_score,
+                details: anomaly.details,
+                status: IF anomaly.severity == 'critical' THEN 'open' ELSE 'investigating'
+            )
+        END FOR
+    END FUNCTION
+    
+    PRIVATE FUNCTION calculate_overall_risk_score():
+        IF COUNT(this.anomalies) == 0: RETURN 0
+        
+        // Weighted average based on severity
+        weights = { 'critical': 1.0, 'high': 0.7, 'medium': 0.4, 'low': 0.2 }
+        
+        total_weight = SUM(this.anomalies, a => weights[a.severity] OR 0.1)
+        weighted_score = SUM(this.anomalies, a => a.risk_score * (weights[a.severity] OR 0.1))
+        
+        RETURN ROUND(weighted_score / total_weight, 2)
+    END FUNCTION
+    
+    PRIVATE FUNCTION ip_country_lookup(ip):
+        // In production, use GeoIP2 or similar
+        // This is a simplified example
+        RETURN 'US' // Placeholder
+    END FUNCTION
+END SERVICE
 ```
 
 #### Step 3: Real-Time API Controller
 
-```ruby
-# app/controllers/api/v1/anomalies_controller.rb
-module Api
-  module V1
-    class AnomaliesController < ApplicationController
-      before_action :authenticate_user!
-      
-      # POST /api/v1/anomalies/analyze
-      # Real-time anomaly detection for a transaction
-      def analyze
-        transaction = LedgerTransaction.find(params[:transaction_id])
+```
+Pseudocode: Real-Time Anomaly API
+
+CONTROLLER AnomaliesController:
+    
+    // POST /api/v1/anomalies/analyze
+    // Real-time anomaly detection for a transaction
+    FUNCTION analyze(transaction_id):
+        transaction = get_transaction(transaction_id)
         
-        # Run real-time analysis
-        service = Realtime::AnomalyDetectionService.new(transaction)
-        result = service.analyze!
+        // Run real-time analysis
+        service = new AnomalyDetectionService(transaction)
+        result = service.analyze()
         
-        # Auto-block if critical
-        if result[:max_severity] == 'critical'
-          transaction.update!(
-            status: 'flagged',
-            flagged_reason: 'Critical anomaly detected',
-            flagged_at: Time.current
-          )
-          
-          # Send immediate alert
-          AlertService.critical_anomaly_detected(transaction, result)
-        end
+        // Auto-block if critical
+        IF result.max_severity == 'critical':
+            update_transaction(transaction, 
+                status: 'flagged',
+                flagged_reason: 'Critical anomaly detected',
+                flagged_at: current_time()
+            )
+            
+            // Send immediate alert
+            send_critical_alert(transaction, result)
+        END IF
         
-        render json: result
-      end
-      
-      # GET /api/v1/anomalies/recent
-      # Get recent anomalies for monitoring
-      def recent
-        scope = AnomalyDetection
-          .includes(:ledger_transaction)
-          .order(created_at: :desc)
+        RETURN result AS JSON
+    END FUNCTION
+    
+    // GET /api/v1/anomalies/recent
+    // Get recent anomalies for monitoring
+    FUNCTION recent(filters):
+        scope = SELECT * FROM anomaly_detections
+        ORDER BY created_at DESC
         
-        # Filter by severity
-        scope = scope.where(severity: params[:severity]) if params[:severity]
+        // Filter by severity
+        IF filters.severity PROVIDED:
+            scope = scope WHERE severity = filters.severity
+        END IF
         
-        # Filter by type
-        scope = scope.where(anomaly_type: params[:type]) if params[:type]
+        // Filter by type
+        IF filters.type PROVIDED:
+            scope = scope WHERE anomaly_type = filters.type
+        END IF
         
-        # Filter by time window
-        if params[:hours]
-          scope = scope.where('created_at > ?', params[:hours].to_i.hours.ago)
-        end
+        // Filter by time window
+        IF filters.hours PROVIDED:
+            scope = scope WHERE created_at > (current_time() - filters.hours hours)
+        END IF
         
-        anomalies = scope.limit(params[:limit] || 50)
+        anomalies = scope LIMIT (filters.limit OR 50)
         
-        render json: {
-          count: anomalies.count,
-          anomalies: anomalies.map do |anomaly|
-            {
-              id: anomaly.id,
-              transaction_id: anomaly.ledger_transaction_id,
-              type: anomaly.anomaly_type,
-              severity: anomaly.severity,
-              risk_score: anomaly.risk_score,
-              status: anomaly.status,
-              detected_at: anomaly.created_at,
-              details: anomaly.details,
-              transaction: {
-                external_ref: anomaly.ledger_transaction.external_ref,
-                amount: anomaly.ledger_transaction.ledger_entries.sum(:amount),
-                status: anomaly.ledger_transaction.status
-              }
-            }
-          end
-        }
-      end
-      
-      # GET /api/v1/anomalies/summary
-      # Real-time dashboard summary
-      def summary
-        time_window = params[:hours] ? params[:hours].to_i.hours.ago : 24.hours.ago
+        RETURN {
+            count: COUNT(anomalies),
+            anomalies: anomalies.map(a => ({
+                id: a.id,
+                transaction_id: a.transaction_id,
+                type: a.anomaly_type,
+                severity: a.severity,
+                risk_score: a.risk_score,
+                status: a.status,
+                detected_at: a.created_at,
+                details: a.details,
+                transaction: {
+                    external_ref: a.transaction.external_ref,
+                    amount: SUM(a.transaction.ledger_entries.amount),
+                    status: a.transaction.status
+                }
+            }))
+        } AS JSON
+    END FUNCTION
+    
+    // GET /api/v1/anomalies/summary
+    // Real-time dashboard summary
+    FUNCTION summary(time_window_hours):
+        time_window = time_window_hours OR 24
+        cutoff = current_time() - (time_window hours)
         
-        summary = {
-          time_window: params[:hours] ? "#{params[:hours]} hours" : '24 hours',
-          total_anomalies: AnomalyDetection.where('created_at > ?', time_window).count,
-          by_severity: AnomalyDetection
-            .where('created_at > ?', time_window)
-            .group(:severity)
-            .count,
-          by_type: AnomalyDetection
-            .where('created_at > ?', time_window)
-            .group(:anomaly_type)
-            .count,
-          critical_unresolved: AnomalyDetection
-            .where(severity: 'critical')
-            .where(status: 'open')
-            .count,
-          avg_risk_score: AnomalyDetection
-            .where('created_at > ?', time_window)
-            .average(:risk_score)
-            &.round(2) || 0,
-          velocity_alerts: AnomalyDetection
-            .where(anomaly_type: 'velocity_anomaly')
-            .where('created_at > ?', time_window)
-            .count,
-          balance_drift_alerts: AnomalyDetection
-            .where(anomaly_type: 'balance_inconsistency')
-            .where('created_at > ?', time_window)
-            .count
-        }
+        RETURN {
+            time_window: time_window + " hours",
+            total_anomalies: COUNT(anomaly_detections WHERE created_at > cutoff),
+            by_severity: GROUP_COUNT(anomaly_detections WHERE created_at > cutoff, severity),
+            by_type: GROUP_COUNT(anomaly_detections WHERE created_at > cutoff, anomaly_type),
+            critical_unresolved: COUNT(
+                anomaly_detections 
+                WHERE severity = 'critical' AND status = 'open'
+            ),
+            avg_risk_score: AVG(
+                anomaly_detections.risk_score 
+                WHERE created_at > cutoff
+            ) OR 0,
+            velocity_alerts: COUNT(
+                anomaly_detections 
+                WHERE anomaly_type = 'velocity_anomaly' AND created_at > cutoff
+            ),
+            balance_drift_alerts: COUNT(
+                anomaly_detections 
+                WHERE anomaly_type = 'balance_inconsistency' AND created_at > cutoff
+            )
+        } AS JSON
+    END FUNCTION
+    
+    // PATCH /api/v1/anomalies/:id/resolve
+    // Mark anomaly as resolved or false positive
+    FUNCTION resolve(anomaly_id, status, notes, user):
+        anomaly = get_anomaly(anomaly_id)
         
-        render json: summary
-      end
-      
-      # PATCH /api/v1/anomalies/:id/resolve
-      # Mark anomaly as resolved or false positive
-      def resolve
-        anomaly = AnomalyDetection.find(params[:id])
-        
-        anomaly.update!(
-          status: params[:status], # 'resolved' or 'false_positive'
-          resolution_notes: params[:notes],
-          resolved_at: Time.current,
-          detected_by_id: current_user.id
+        update_anomaly(anomaly,
+            status: status, // 'resolved' or 'false_positive'
+            resolution_notes: notes,
+            resolved_at: current_time(),
+            detected_by_id: user.id
         )
         
-        # If resolving critical anomaly, unflag transaction
-        if anomaly.severity == 'critical' && params[:status] == 'false_positive'
-          anomaly.ledger_transaction.update!(
-            status: 'posted',
-            flagged_reason: nil,
-            flagged_at: nil
-          )
-        end
+        // If resolving critical anomaly, unflag transaction
+        IF anomaly.severity == 'critical' AND status == 'false_positive':
+            update_transaction(anomaly.transaction,
+                status: 'posted',
+                flagged_reason: NULL,
+                flagged_at: NULL
+            )
+        END IF
         
-        render json: { success: true, anomaly: anomaly }
-      end
-      
-      # GET /api/v1/anomalies/velocity-check
-      # Quick velocity check for payment processing
-      def velocity_check
-        account_id = params[:account_id]
+        RETURN { success: true, anomaly: anomaly } AS JSON
+    END FUNCTION
+    
+    // GET /api/v1/anomalies/velocity-check
+    // Quick velocity check for payment processing
+    FUNCTION velocity_check(account_id):
+        recent_count = COUNT(
+            SELECT * FROM transaction_events
+            WHERE event_type = 'created'
+            AND occurred_at > (current_time() - 1 minute)
+            AND ledger_transaction_id IN (
+                SELECT id FROM transactions
+                JOIN ledger_entries ON transactions.id = ledger_entries.transaction_id
+                WHERE ledger_entries.account_id = account_id
+            )
+        )
         
-        recent_count = TransactionEvent
-          .where(event_type: 'created')
-          .where('occurred_at > ?', 1.minute.ago)
-          .where(
-            ledger_transaction_id: LedgerTransaction
-              .joins(:ledger_entries)
-              .where(ledger_entries: { account_id: account_id })
-              .select(:id)
-          )
-          .count
+        threshold = VELOCITY_THRESHOLD
         
-        threshold = Realtime::AnomalyDetectionService::VELOCITY_THRESHOLD
-        
-        render json: {
-          account_id: account_id,
-          transactions_last_minute: recent_count,
-          threshold: threshold,
-          velocity_exceeded: recent_count > threshold,
-          risk_level: if recent_count > threshold * 2
-            'critical'
-          elsif recent_count > threshold
-            'high'
-          else
-            'normal'
-          end
-        }
-      end
-    end
-  end
-end
+        RETURN {
+            account_id: account_id,
+            transactions_last_minute: recent_count,
+            threshold: threshold,
+            velocity_exceeded: recent_count > threshold,
+            risk_level: IF recent_count > threshold * 2 THEN
+                'critical'
+            ELSE IF recent_count > threshold THEN
+                'high'
+            ELSE
+                'normal'
+            END IF
+        } AS JSON
+    END FUNCTION
+END CONTROLLER
 ```
 
 #### Step 4: WebSocket for Real-Time Alerts
 
-```ruby
-# app/channels/anomaly_channel.rb
-class AnomalyChannel < ApplicationCable::Channel
-  def subscribed
-    stream_from "anomaly_alerts"
-    
-    # Send current critical anomalies on connection
-    critical_anomalies = AnomalyDetection
-      .where(severity: 'critical')
-      .where(status: 'open')
-      .includes(:ledger_transaction)
-      .limit(10)
-    
-    transmit({
-      type: 'initial_state',
-      critical_count: critical_anomalies.count,
-      anomalies: format_anomalies(critical_anomalies)
-    })
-  end
-  
-  def unsubscribed
-    # Any cleanup needed
-  end
-  
-  private
-  
-  def format_anomalies(anomalies)
-    anomalies.map do |anomaly|
-      {
-        id: anomaly.id,
-        type: anomaly.anomaly_type,
-        severity: anomaly.severity,
-        risk_score: anomaly.risk_score,
-        transaction_id: anomaly.ledger_transaction_id,
-        transaction_ref: anomaly.ledger_transaction.external_ref,
-        description: anomaly.details['description'],
-        detected_at: anomaly.created_at
-      }
-    end
-  end
-end
+```
+Pseudocode: Anomaly Alert Channel
 
-# Broadcast when anomaly detected (in AnomalyDetectionService)
-# AnomalyDetectionBroadcastJob.perform_later(anomaly)
+CHANNEL AnomalyChannel:
+    FUNCTION on_connect():
+        subscribe("anomaly_alerts")
+        
+        // Send current critical anomalies on connection
+        critical_anomalies = SELECT * FROM anomaly_detections
+        WHERE severity = 'critical'
+        AND status = 'open'
+        ORDER BY created_at DESC
+        LIMIT 10
+        
+        send_message({
+            type: 'initial_state',
+            critical_count: COUNT(critical_anomalies),
+            anomalies: format_anomalies(critical_anomalies)
+        })
+    END FUNCTION
+    
+    PRIVATE FUNCTION format_anomalies(anomalies):
+        RETURN anomalies.map(a => ({
+            id: a.id,
+            type: a.anomaly_type,
+            severity: a.severity,
+            risk_score: a.risk_score,
+            transaction_id: a.transaction_id,
+            transaction_ref: a.transaction.external_ref,
+            description: a.details.description,
+            detected_at: a.created_at
+        }))
+    END FUNCTION
+END CHANNEL
 
-# app/jobs/anomaly_detection_broadcast_job.rb
-class AnomalyDetectionBroadcastJob < ApplicationJob
-  def perform(anomaly)
-    ActionCable.server.broadcast(
-      "anomaly_alerts",
-      {
-        type: 'new_anomaly',
-        anomaly: {
-          id: anomaly.id,
-          type: anomaly.anomaly_type,
-          severity: anomaly.severity,
-          risk_score: anomaly.risk_score,
-          transaction_id: anomaly.ledger_transaction_id,
-          description: anomaly.details['description']
-        }
-      }
-    )
-  end
-end
+// Job to broadcast when anomaly detected
+JOB AnomalyDetectionBroadcastJob:
+    FUNCTION execute(anomaly):
+        broadcast_message("anomaly_alerts", {
+            type: 'new_anomaly',
+            anomaly: {
+                id: anomaly.id,
+                type: anomaly.anomaly_type,
+                severity: anomaly.severity,
+                risk_score: anomaly.risk_score,
+                transaction_id: anomaly.transaction_id,
+                description: anomaly.details.description
+            }
+        })
+    END FUNCTION
+END JOB
 ```
 
 #### Step 5: Client-Side Dashboard (JavaScript)

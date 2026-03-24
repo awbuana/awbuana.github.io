@@ -62,47 +62,58 @@ The naive approach—querying the same tables you write to—works fine until it
 
 Let's start with the obvious solution and watch it fall over:
 
-```ruby
-# app/services/user_balance_service.rb
-class UserBalanceService
-  # DON'T DO THIS IN PRODUCTION
-  def self.current_balance(account_id)
-    LedgerEntry
-      .joins(:ledger_transaction)
-      .where(account_id: account_id)
-      .where(ledger_transactions: { status: 'posted' })
-      .sum("CASE WHEN direction = 'credit' THEN amount ELSE -amount END")
-  end
-  
-  def self.transaction_history(account_id, limit: 50)
-    LedgerEntry
-      .joins(:ledger_transaction)
-      .where(account_id: account_id)
-      .where(ledger_transactions: { status: 'posted' })
-      .order('ledger_transactions.posted_at DESC')
-      .limit(limit)
-      .map do |entry|
-        {
-          date: entry.ledger_transaction.posted_at,
-          description: entry.ledger_transaction.description,
-          amount: entry.signed_amount,
-          balance: calculate_running_balance(account_id, entry)
-        }
-      end
-  end
-  
-  private
-  
-  def self.calculate_running_balance(account_id, entry)
-    # This is O(n²) - we're recalculating from scratch for each entry
-    LedgerEntry
-      .joins(:ledger_transaction)
-      .where(account_id: account_id)
-      .where(ledger_transactions: { status: 'posted' })
-      .where('ledger_transactions.posted_at <= ?', entry.ledger_transaction.posted_at)
-      .sum("CASE WHEN direction = 'credit' THEN amount ELSE -amount END")
-  end
-end
+```
+Pseudocode Implementation:
+
+FUNCTION GetCurrentBalance(account_id):
+    entries = QUERY LedgerEntry 
+        JOIN LedgerTransaction 
+        WHERE account_id = {account_id}
+        AND LedgerTransaction.status = 'posted'
+    
+    balance = 0
+    FOR EACH entry IN entries:
+        IF entry.direction = 'credit':
+            balance = balance + entry.amount
+        ELSE:
+            balance = balance - entry.amount
+    
+    RETURN balance
+
+FUNCTION GetTransactionHistory(account_id, limit = 50):
+    entries = QUERY LedgerEntry
+        JOIN LedgerTransaction
+        WHERE account_id = {account_id}
+        AND LedgerTransaction.status = 'posted'
+        ORDER BY LedgerTransaction.posted_at DESC
+        LIMIT {limit}
+    
+    history = []
+    FOR EACH entry IN entries:
+        history.APPEND({
+            date: entry.posted_at,
+            description: entry.description,
+            amount: entry.signed_amount,
+            balance: CalculateRunningBalance(account_id, entry)
+        })
+    
+    RETURN history
+
+FUNCTION CalculateRunningBalance(account_id, target_entry):
+    entries = QUERY LedgerEntry
+        JOIN LedgerTransaction
+        WHERE account_id = {account_id}
+        AND LedgerTransaction.status = 'posted'
+        AND LedgerTransaction.posted_at <= target_entry.posted_at
+    
+    balance = 0
+    FOR EACH entry IN entries:
+        IF entry.direction = 'credit':
+            balance = balance + entry.amount
+        ELSE:
+            balance = balance - entry.amount
+    
+    RETURN balance
 ```
 
 This works beautifully in development with 50 transactions. Then you deploy to production:
@@ -159,65 +170,64 @@ The insight: **it's okay to store the same data in multiple formats** if each fo
 
 #### Step 1: Create Read-Optimized Tables
 
-```ruby
-# db/migrate/xxx_create_user_facing_tables.rb
-class CreateUserFacingTables < ActiveRecord::Migration[7.0]
-  def change
-    # Materialized account summary - one row per account
-    create_table :account_projections do |t|
-      t.references :account, null: false, foreign_key: true, index: { unique: true }
-      t.decimal :current_balance, precision: 19, scale: 4, default: 0
-      t.decimal :available_balance, precision: 19, scale: 4, default: 0
-      t.integer :total_transactions, default: 0
-      t.datetime :last_transaction_at
-      t.string :last_transaction_id
-      t.decimal :last_transaction_amount, precision: 19, scale: 4
-      t.datetime :updated_at, null: false
-      
-      # Critical: Index for fast lookups
-      t.index [:account_id, :updated_at]
-    end
+**Account Projections Table:**
+```sql
+TABLE account_projections (
+    account_id              UUID PRIMARY KEY,
+    current_balance         DECIMAL(19,4) DEFAULT 0,
+    available_balance       DECIMAL(19,4) DEFAULT 0,
+    total_transactions      INTEGER DEFAULT 0,
+    last_transaction_at     TIMESTAMP,
+    last_transaction_id     VARCHAR,
+    last_transaction_amount DECIMAL(19,4),
+    updated_at              TIMESTAMP NOT NULL
+);
+
+INDEX idx_account_projections_updated (account_id, updated_at);
+```
+
+**Transaction Projections Table:**
+```sql
+TABLE transaction_projections (
+    id               UUID PRIMARY KEY,
+    account_id       UUID NOT NULL,
+    transaction_id   VARCHAR NOT NULL UNIQUE,
+    external_ref     VARCHAR,
+    transaction_type VARCHAR,  -- 'credit', 'debit', 'fee', 'refund'
+    amount           DECIMAL(19,4) NOT NULL,
+    balance_after    DECIMAL(19,4) NOT NULL,
+    currency         VARCHAR NOT NULL,
+    status           VARCHAR,  -- 'completed', 'pending', 'failed'
+    description      VARCHAR,
+    counterparty_name VARCHAR,
+    counterparty_icon VARCHAR,
+    metadata         JSON,
+    posted_at        TIMESTAMP NOT NULL,
+    created_at       TIMESTAMP NOT NULL
+);
+
+INDEX idx_txn_account_date (account_id, posted_at DESC);
+INDEX idx_txn_account_type_date (account_id, transaction_type, posted_at);
+INDEX idx_txn_external_ref (external_ref);
+```
+
+**Daily Balance Snapshots Table:**
+```sql
+TABLE daily_balance_snapshots (
+    id                UUID PRIMARY KEY,
+    account_id        UUID NOT NULL,
+    snapshot_date     DATE NOT NULL,
+    opening_balance   DECIMAL(19,4),
+    closing_balance   DECIMAL(19,4),
+    total_credits     DECIMAL(19,4) DEFAULT 0,
+    total_debits      DECIMAL(19,4) DEFAULT 0,
+    transaction_count INTEGER DEFAULT 0,
+    created_at        TIMESTAMP NOT NULL,
     
-    # User-facing transaction list - denormalized for fast reads
-    create_table :transaction_projections do |t|
-      t.references :account, null: false, foreign_key: true
-      t.string :transaction_id, null: false
-      t.string :external_ref
-      t.string :transaction_type # 'credit', 'debit', 'fee', 'refund'
-      t.decimal :amount, precision: 19, scale: 4, null: false
-      t.decimal :balance_after, precision: 19, scale: 4, null: false
-      t.string :currency, null: false
-      t.string :status # 'completed', 'pending', 'failed'
-      t.string :description
-      t.string :counterparty_name # Who sent/received
-      t.string :counterparty_icon # URL or identifier
-      t.jsonb :metadata # Flexible metadata
-      t.datetime :posted_at, null: false
-      t.datetime :created_at, null: false
-      
-      # Indexes for common queries
-      t.index [:account_id, :posted_at], order: { posted_at: :desc }
-      t.index [:account_id, :transaction_type, :posted_at]
-      t.index [:external_ref]
-      t.index [:transaction_id], unique: true
-    end
-    
-    # Daily balance snapshots for fast historical queries
-    create_table :daily_balance_snapshots do |t|
-      t.references :account, null: false, foreign_key: true
-      t.date :snapshot_date, null: false
-      t.decimal :opening_balance, precision: 19, scale: 4
-      t.decimal :closing_balance, precision: 19, scale: 4
-      t.decimal :total_credits, precision: 19, scale: 4, default: 0
-      t.decimal :total_debits, precision: 19, scale: 4, default: 0
-      t.integer :transaction_count, default: 0
-      t.datetime :created_at, null: false
-      
-      t.index [:account_id, :snapshot_date], unique: true
-      t.index [:snapshot_date]
-    end
-  end
-end
+    UNIQUE (account_id, snapshot_date)
+);
+
+INDEX idx_snapshot_date (snapshot_date);
 ```
 
 Key design decisions:
@@ -230,236 +240,257 @@ Key design decisions:
 
 #### Step 2: Projection Updater Service
 
-```ruby
-# app/services/projections/projection_updater.rb
-module Projections
-  class ProjectionUpdater
-    def initialize
-      @batch_size = 1000
-    end
+```
+Pseudocode - Projection Updater Service:
+
+CLASS ProjectionUpdater:
+    
+    INITIALIZE batch_size = 1000
     
     # Called whenever a transaction is posted
-    def update_for_transaction(ledger_transaction)
-      ActiveRecord::Base.transaction do
-        ledger_transaction.ledger_entries.each do |entry|
-          update_account_projection(entry)
-          create_transaction_projection(entry, ledger_transaction)
-        end
-      end
-    end
+    FUNCTION UpdateForTransaction(ledger_transaction):
+        BEGIN TRANSACTION
+            FOR EACH entry IN ledger_transaction.ledger_entries:
+                UpdateAccountProjection(entry)
+                CreateTransactionProjection(entry, ledger_transaction)
+            END FOR
+        COMMIT TRANSACTION
     
     # Batch update for backfills or migrations
-    def batch_update_accounts(account_ids)
-      account_ids.each do |account_id|
-        rebuild_account_projection(account_id)
-      end
-    end
+    FUNCTION BatchUpdateAccounts(account_ids):
+        FOR EACH account_id IN account_ids:
+            RebuildAccountProjection(account_id)
+        END FOR
     
-    private
+    PRIVATE
     
-    def update_account_projection(entry)
-      account = entry.account
-      
-      projection = AccountProjection.find_or_initialize_by(account_id: account.id)
-      
-      # Calculate new balance
-      old_balance = projection.current_balance || 0
-      amount_change = entry.signed_amount
-      new_balance = old_balance + amount_change
-      
-      # Calculate available balance (considering reservations)
-      reservations = Reservation
-        .where(account_id: account.id)
-        .where('expires_at > ?', Time.current)
-        .sum(:amount)
-      
-      projection.update!(
-        current_balance: new_balance,
-        available_balance: new_balance - reservations,
-        total_transactions: projection.total_transactions + 1,
-        last_transaction_at: entry.ledger_transaction.posted_at,
-        last_transaction_id: entry.ledger_transaction.id,
-        last_transaction_amount: entry.amount,
-        updated_at: Time.current
-      )
-    end
+    FUNCTION UpdateAccountProjection(entry):
+        account = GET Account WHERE id = entry.account_id
+        
+        projection = GET OR CREATE AccountProjection 
+            WHERE account_id = account.id
+        
+        # Calculate new balance
+        old_balance = IF projection.current_balance IS NULL THEN 0 
+                      ELSE projection.current_balance
+        amount_change = entry.signed_amount
+        new_balance = old_balance + amount_change
+        
+        # Calculate available balance (considering reservations)
+        reservations = SUM(Reservation.amount)
+            WHERE account_id = account.id
+            AND expires_at > CurrentTime()
+        
+        UPDATE AccountProjection
+        SET current_balance = new_balance,
+            available_balance = new_balance - reservations,
+            total_transactions = projection.total_transactions + 1,
+            last_transaction_at = entry.posted_at,
+            last_transaction_id = entry.transaction_id,
+            last_transaction_amount = entry.amount,
+            updated_at = CurrentTime()
+        WHERE account_id = account.id
     
-    def create_transaction_projection(entry, ledger_transaction)
-      # Determine transaction type and counterparty
-      txn_type = entry.direction == 'credit' ? 'credit' : 'debit'
-      counterparty = find_counterparty(entry, ledger_transaction)
-      
-      # Get balance after this transaction
-      balance_after = calculate_balance_after(entry)
-      
-      TransactionProjection.create!(
-        account_id: entry.account_id,
-        transaction_id: ledger_transaction.id,
-        external_ref: ledger_transaction.external_ref,
-        transaction_type: txn_type,
-        amount: entry.amount,
-        balance_after: balance_after,
-        currency: entry.currency,
-        status: ledger_transaction.status,
-        description: entry.description || ledger_transaction.description,
-        counterparty_name: counterparty[:name],
-        counterparty_icon: counterparty[:icon],
-        metadata: build_metadata(entry, ledger_transaction),
-        posted_at: ledger_transaction.posted_at,
-        created_at: Time.current
-      )
-    end
+    FUNCTION CreateTransactionProjection(entry, ledger_transaction):
+        # Determine transaction type
+        IF entry.direction = 'credit':
+            txn_type = 'credit'
+        ELSE:
+            txn_type = 'debit'
+        
+        counterparty = FindCounterparty(entry, ledger_transaction)
+        balance_after = CalculateBalanceAfter(entry)
+        
+        INSERT INTO transaction_projections (
+            account_id,
+            transaction_id,
+            external_ref,
+            transaction_type,
+            amount,
+            balance_after,
+            currency,
+            status,
+            description,
+            counterparty_name,
+            counterparty_icon,
+            metadata,
+            posted_at,
+            created_at
+        ) VALUES (
+            entry.account_id,
+            ledger_transaction.id,
+            ledger_transaction.external_ref,
+            txn_type,
+            entry.amount,
+            balance_after,
+            entry.currency,
+            ledger_transaction.status,
+            COALESCE(entry.description, ledger_transaction.description),
+            counterparty.name,
+            counterparty.icon,
+            BuildMetadata(entry, ledger_transaction),
+            ledger_transaction.posted_at,
+            CurrentTime()
+        )
     
-    def calculate_balance_after(entry)
-      # Sum all entries up to and including this one
-      LedgerEntry
-        .joins(:ledger_transaction)
-        .where(account_id: entry.account_id)
-        .where(ledger_transactions: { status: 'posted' })
-        .where('ledger_transactions.posted_at < ? OR (ledger_transactions.posted_at = ? AND ledger_entries.created_at <= ?)',
-               entry.ledger_transaction.posted_at,
-               entry.ledger_transaction.posted_at,
-               entry.created_at)
-        .sum("CASE WHEN direction = 'credit' THEN amount ELSE -amount END")
-    end
+    FUNCTION CalculateBalanceAfter(entry):
+        entries = QUERY LedgerEntry
+            JOIN LedgerTransaction
+            WHERE account_id = entry.account_id
+            AND LedgerTransaction.status = 'posted'
+            AND (
+                LedgerTransaction.posted_at < entry.posted_at
+                OR (
+                    LedgerTransaction.posted_at = entry.posted_at
+                    AND LedgerEntry.created_at <= entry.created_at
+                )
+            )
+        
+        balance = 0
+        FOR EACH e IN entries:
+            IF e.direction = 'credit':
+                balance = balance + e.amount
+            ELSE:
+                balance = balance - e.amount
+        
+        RETURN balance
     
-    def find_counterparty(entry, ledger_transaction)
-      # Find the other side of the transaction
-      other_entry = ledger_transaction.ledger_entries.find { |e| e.id != entry.id }
-      
-      if other_entry
-        account = other_entry.account
-        {
-          name: account.owner_name || account.account_number,
-          icon: account.owner_avatar_url
+    FUNCTION FindCounterparty(entry, ledger_transaction):
+        # Find the other side of the transaction
+        other_entry = FIND LedgerEntry 
+            WHERE transaction_id = ledger_transaction.id
+            AND id != entry.id
+        
+        IF other_entry EXISTS:
+            account = GET Account WHERE id = other_entry.account_id
+            RETURN {
+                name: COALESCE(account.owner_name, account.account_number),
+                icon: account.owner_avatar_url
+            }
+        ELSE:
+            RETURN { name: 'System', icon: NULL }
+    
+    FUNCTION BuildMetadata(entry, ledger_transaction):
+        metadata = {
+            entry_id: entry.id,
+            transaction_status: ledger_transaction.status,
+            can_reverse: (
+                ledger_transaction.status = 'posted'
+                AND ledger_transaction.is_reversed = FALSE
+            )
         }
-      else
-        { name: 'System', icon: nil }
-      end
-    end
+        
+        IF ledger_transaction.is_reversed:
+            metadata.reversal_info = {
+                reversed_at: ledger_transaction.reversed_at,
+                reversal_transaction_id: ledger_transaction.metadata.reversal_transaction_id
+            }
+        
+        RETURN metadata
     
-    def build_metadata(entry, ledger_transaction)
-      {
-        entry_id: entry.id,
-        transaction_status: ledger_transaction.status,
-        can_reverse: ledger_transaction.posted? && !ledger_transaction.reversed?,
-        reversal_info: ledger_transaction.reversed? ? {
-          reversed_at: ledger_transaction.reversed_at,
-          reversal_transaction_id: ledger_transaction.metadata['reversal_transaction_id']
-        } : nil
-      }
-    end
-    
-    def rebuild_account_projection(account_id)
-      # Full recalculation from source of truth
-      entries = LedgerEntry
-        .joins(:ledger_transaction)
-        .where(account_id: account_id)
-        .where(ledger_transactions: { status: 'posted' })
-        .order('ledger_transactions.posted_at ASC')
-      
-      balance = 0
-      last_txn = nil
-      
-      entries.each do |entry|
-        balance += entry.signed_amount
-        last_txn = entry.ledger_transaction
-      end
-      
-      AccountProjection.find_or_initialize_by(account_id: account_id).update!(
-        current_balance: balance,
-        total_transactions: entries.count,
-        last_transaction_at: last_txn&.posted_at,
-        last_transaction_id: last_txn&.id,
-        updated_at: Time.current
-      )
-    end
-  end
-end
+    FUNCTION RebuildAccountProjection(account_id):
+        # Full recalculation from source of truth
+        entries = QUERY LedgerEntry
+            JOIN LedgerTransaction
+            WHERE account_id = account_id
+            AND LedgerTransaction.status = 'posted'
+            ORDER BY LedgerTransaction.posted_at ASC
+        
+        balance = 0
+        last_txn = NULL
+        
+        FOR EACH entry IN entries:
+            balance = balance + entry.signed_amount
+            last_txn = entry.ledger_transaction
+        
+        UPSERT INTO account_projections (
+            account_id,
+            current_balance,
+            total_transactions,
+            last_transaction_at,
+            last_transaction_id,
+            updated_at
+        ) VALUES (
+            account_id,
+            balance,
+            COUNT(entries),
+            last_txn.posted_at,
+            last_txn.id,
+            CurrentTime()
+        )
 ```
 
 #### Step 3: Event-Driven Updates
 
-```ruby
-# app/models/ledger_transaction.rb
-class LedgerTransaction < ApplicationRecord
-  has_many :ledger_entries, dependent: :destroy
-  
-  after_commit :update_projections, on: :create
-  after_commit :update_projections_on_status_change, on: :update
-  
-  private
-  
-  def update_projections
-    return unless posted?
-    
-    # Queue async job to update projections
-    ProjectionUpdateJob.perform_later(self.id)
-  end
-  
-  def update_projections_on_status_change
-    return unless saved_change_to_status? && posted?
-    
-    ProjectionUpdateJob.perform_later(self.id)
-  end
-end
+```
+Pseudocode - Event-Driven Update System:
 
-# app/jobs/projection_update_job.rb
-class ProjectionUpdateJob < ApplicationJob
-  queue_as :projections
-  
-  retry_on StandardError, wait: :polynomially_longer, attempts: 5
-  
-  def perform(transaction_id)
-    transaction = LedgerTransaction.find(transaction_id)
+CLASS LedgerTransaction:
+    ledger_entries: LIST of LedgerEntry
     
-    Projections::ProjectionUpdater.new.update_for_transaction(transaction)
+    # After transaction is committed
+    AFTER_COMMIT ON CREATE:
+        IF self.status = 'posted':
+            QueueJob(ProjectionUpdateJob, self.id)
     
-    # Also update daily snapshot if needed
-    update_daily_snapshot(transaction)
-  rescue ActiveRecord::RecordNotFound
-    # Transaction was rolled back, ignore
-  end
-  
-  private
-  
-  def update_daily_snapshot(transaction)
-    date = transaction.posted_at.to_date
+    # After status changes
+    AFTER_COMMIT ON UPDATE:
+        IF status_changed AND self.status = 'posted':
+            QueueJob(ProjectionUpdateJob, self.id)
+
+
+CLASS ProjectionUpdateJob:
+    queue_name = 'projections'
+    max_retries = 5
+    retry_delay = 'polynomial'  # Increases with each attempt
     
-    transaction.ledger_entries.each do |entry|
-      snapshot = DailyBalanceSnapshot.find_or_initialize_by(
-        account_id: entry.account_id,
-        snapshot_date: date
-      )
-      
-      if entry.credit?
-        snapshot.total_credits += entry.amount
-      else
-        snapshot.total_debits += entry.amount
-      end
-      
-      snapshot.closing_balance = entry.account.balance
-      snapshot.transaction_count += 1
-      snapshot.save!
-    end
-  end
-end
+    FUNCTION Execute(transaction_id):
+        transaction = GET LedgerTransaction WHERE id = transaction_id
+        
+        IF transaction NOT FOUND:
+            RETURN  # Transaction was rolled back, ignore
+        
+        updater = NEW ProjectionUpdater()
+        updater.UpdateForTransaction(transaction)
+        
+        # Also update daily snapshot if needed
+        UpdateDailySnapshot(transaction)
+    
+    PRIVATE
+    
+    FUNCTION UpdateDailySnapshot(transaction):
+        date = DATE(transaction.posted_at)
+        
+        FOR EACH entry IN transaction.ledger_entries:
+            snapshot = GET OR CREATE DailyBalanceSnapshot
+                WHERE account_id = entry.account_id
+                AND snapshot_date = date
+            
+            IF entry.direction = 'credit':
+                snapshot.total_credits = snapshot.total_credits + entry.amount
+            ELSE:
+                snapshot.total_debits = snapshot.total_debits + entry.amount
+            
+            snapshot.closing_balance = entry.account.balance
+            snapshot.transaction_count = snapshot.transaction_count + 1
+            
+            SAVE snapshot
 ```
 
 Now when a user opens their app:
 
-```ruby
+```
 # Lightning-fast balance lookup
-AccountProjection.find_by(account_id: user.account_id).current_balance
-# => 0.8ms
+SELECT current_balance FROM account_projections 
+WHERE account_id = user.account_id
+-- => 0.8ms
 
 # Paginated transaction history
-TransactionProjection
-  .where(account_id: user.account_id)
-  .order(posted_at: :desc)
-  .page(params[:page])
-  .per(50)
-# => 12ms
+SELECT * FROM transaction_projections
+WHERE account_id = user.account_id
+ORDER BY posted_at DESC
+LIMIT 50 OFFSET 0
+-- => 12ms
 ```
 
 That's the difference between a user staring at a spinner and a user smiling because the app feels instant.
@@ -470,139 +501,132 @@ Even with projections, you'll hit limits. When 10,000 users check their balance 
 
 ### Redis for Hot Data
 
-```ruby
-# app/services/balance_cache_service.rb
-module BalanceCacheService
-  CACHE_TTL = 5.minutes
-  
-  def self.current_balance(account_id)
-    cache_key = "balance:#{account_id}"
+```
+Pseudocode - Balance Cache Service:
+
+MODULE BalanceCacheService:
+    CACHE_TTL = 5 MINUTES
     
-    # Try cache first
-    cached = Redis.current.get(cache_key)
-    return cached.to_d if cached
-    
-    # Cache miss - get from projection
-    projection = AccountProjection.find_by(account_id: account_id)
-    balance = projection&.current_balance || 0
-    
-    # Store in cache with TTL
-    Redis.current.setex(cache_key, CACHE_TTL, balance.to_s)
-    
-    balance
-  end
-  
-  def self.invalidate(account_id)
-    Redis.current.del("balance:#{account_id}")
-    Redis.current.del("available_balance:#{account_id}")
-  end
-  
-  def self.bulk_fetch(account_ids)
-    return {} if account_ids.empty?
-    
-    # Fetch all balances in one Redis round-trip
-    cache_keys = account_ids.map { |id| "balance:#{id}" }
-    cached_values = Redis.current.mget(*cache_keys)
-    
-    result = {}
-    missing_ids = []
-    
-    account_ids.each_with_index do |id, index|
-      if cached_values[index]
-        result[id] = cached_values[index].to_d
-      else
-        missing_ids << id
-      end
-    end
-    
-    # Batch fetch missing balances
-    if missing_ids.any?
-      projections = AccountProjection.where(account_id: missing_ids)
-      
-      projections.each do |proj|
-        result[proj.account_id] = proj.current_balance
+    FUNCTION GetCurrentBalance(account_id):
+        cache_key = "balance:" + account_id
         
-        # Populate cache
-        Redis.current.setex(
-          "balance:#{proj.account_id}",
-          CACHE_TTL,
-          proj.current_balance.to_s
-        )
-      end
-    end
+        # Try cache first
+        cached = Redis.GET(cache_key)
+        IF cached IS NOT NULL:
+            RETURN ConvertToDecimal(cached)
+        
+        # Cache miss - get from projection
+        projection = GET AccountProjection WHERE account_id = account_id
+        balance = IF projection IS NULL THEN 0 
+                  ELSE projection.current_balance
+        
+        # Store in cache with TTL
+        Redis.SETEX(cache_key, CACHE_TTL, balance)
+        
+        RETURN balance
     
-    result
-  end
-end
+    FUNCTION Invalidate(account_id):
+        Redis.DELETE("balance:" + account_id)
+        Redis.DELETE("available_balance:" + account_id)
+    
+    FUNCTION BulkFetch(account_ids):
+        IF account_ids IS EMPTY:
+            RETURN EMPTY_MAP
+        
+        # Fetch all balances in one Redis round-trip
+        cache_keys = []
+        FOR EACH id IN account_ids:
+            cache_keys.APPEND("balance:" + id)
+        
+        cached_values = Redis.MGET(cache_keys)
+        
+        result = EMPTY_MAP
+        missing_ids = []
+        
+        FOR index = 0 TO LENGTH(account_ids) - 1:
+            id = account_ids[index]
+            IF cached_values[index] IS NOT NULL:
+                result[id] = ConvertToDecimal(cached_values[index])
+            ELSE:
+                missing_ids.APPEND(id)
+        
+        # Batch fetch missing balances
+        IF missing_ids IS NOT EMPTY:
+            projections = QUERY AccountProjection
+                WHERE account_id IN missing_ids
+            
+            FOR EACH proj IN projections:
+                result[proj.account_id] = proj.current_balance
+                
+                # Populate cache
+                Redis.SETEX(
+                    "balance:" + proj.account_id,
+                    CACHE_TTL,
+                    proj.current_balance
+                )
+        
+        RETURN result
 ```
 
 ### Cache Invalidation Strategy
 
 The hard part of caching is invalidation. Here's a battle-tested approach:
 
-```ruby
-# app/services/projections/cache_invalidator.rb
-module Projections
-  class CacheInvalidator
-    def self.on_transaction_posted(ledger_transaction)
-      # Invalidate balance cache for affected accounts
-      ledger_transaction.ledger_entries.each do |entry|
-        BalanceCacheService.invalidate(entry.account_id)
+```
+Pseudocode - Cache Invalidator:
+
+MODULE CacheInvalidator:
+    
+    FUNCTION OnTransactionPosted(ledger_transaction):
+        # Invalidate balance cache for affected accounts
+        FOR EACH entry IN ledger_transaction.ledger_entries:
+            BalanceCacheService.Invalidate(entry.account_id)
+            
+            # Also invalidate any related list caches
+            InvalidateTransactionListCache(entry.account_id)
+    
+    FUNCTION InvalidateTransactionListCache(account_id):
+        # Pattern: transaction_list:{account_id}:{page}
+        # We need to find and delete all pages for this account
+        pattern = "transaction_list:" + account_id + ":*"
         
-        # Also invalidate any related list caches
-        invalidate_transaction_list_cache(entry.account_id)
-      end
-    end
+        # Use SCAN to find matching keys (safer than KEYS in production)
+        cursor = 0
+        LOOP:
+            cursor, keys = Redis.SCAN(cursor, pattern, batch_size=100)
+            IF keys IS NOT EMPTY:
+                Redis.DELETE(keys)
+            IF cursor = "0":
+                BREAK
     
-    def self.invalidate_transaction_list_cache(account_id)
-      # Pattern: transaction_list:{account_id}:{page}
-      # We need to find and delete all pages for this account
-      pattern = "transaction_list:#{account_id}:*"
-      
-      # Use SCAN to find matching keys (safer than KEYS in production)
-      cursor = 0
-      loop do
-        cursor, keys = Redis.current.scan(cursor, match: pattern, count: 100)
-        Redis.current.del(*keys) if keys.any?
-        break if cursor == "0"
-      end
-    end
+    FUNCTION WarmCacheForAccount(account_id):
+        # Pre-populate cache for frequently accessed accounts
+        projection = GET AccountProjection WHERE account_id = account_id
+        IF projection IS NULL:
+            RETURN
+        
+        # Warm balance cache
+        BalanceCacheService.GetCurrentBalance(account_id)
+        
+        # Pre-load first page of transactions
+        transactions = QUERY TransactionProjection
+            WHERE account_id = account_id
+            ORDER BY posted_at DESC
+            LIMIT 50
+        
+        CacheTransactionList(account_id, 1, transactions)
     
-    def self.warm_cache_for_account(account_id)
-      # Pre-populate cache for frequently accessed accounts
-      projection = AccountProjection.find_by(account_id: account_id)
-      return unless projection
-      
-      BalanceCacheService.current_balance(account_id)
-      
-      # Pre-load first page of transactions
-      transactions = TransactionProjection
-        .where(account_id: account_id)
-        .order(posted_at: :desc)
-        .limit(50)
-      
-      cache_transaction_list(account_id, 1, transactions)
-    end
+    PRIVATE
     
-    private
-    
-    def self.cache_transaction_list(account_id, page, transactions)
-      cache_key = "transaction_list:#{account_id}:#{page}"
-      Redis.current.setex(cache_key, CACHE_TTL, transactions.to_json)
-    end
-  end
-end
+    FUNCTION CacheTransactionList(account_id, page, transactions):
+        cache_key = "transaction_list:" + account_id + ":" + page
+        Redis.SETEX(cache_key, CACHE_TTL, SerializeToJSON(transactions))
+
 
 # Hook into transaction posting
-class LedgerTransaction < ApplicationRecord
-  after_commit :invalidate_caches, on: [:create, :update]
-  
-  private
-  
-  def invalidate_caches
-    Projections::CacheInvalidator.on_transaction_posted(self)
-  end
-end
+CLASS LedgerTransaction:
+    AFTER_COMMIT ON CREATE, UPDATE:
+        CacheInvalidator.OnTransactionPosted(self)
 ```
 
 ## Layer 4: API Design for User Dashboards
@@ -611,347 +635,325 @@ Now that we have fast queries, let's design clean APIs.
 
 ### Balance Endpoint
 
-```ruby
-# app/controllers/api/v1/balances_controller.rb
-module Api
-  module V1
-    class BalancesController < ApplicationController
-      before_action :authenticate_user!
-      
-      # GET /api/v1/balances
-      def show
+```
+Pseudocode - Balance API Controller:
+
+CLASS BalanceController:
+    
+    # GET /api/v1/balances
+    FUNCTION Show():
+        AuthenticateUser()
+        
         account = current_user.account
         
         # Use cache-first approach
-        current_balance = BalanceCacheService.current_balance(account.id)
-        available_balance = fetch_available_balance(account.id)
+        current_balance = BalanceCacheService.GetCurrentBalance(account.id)
+        available_balance = FetchAvailableBalance(account.id)
         
-        render json: {
-          account_id: account.id,
-          account_number: mask_account_number(account.account_number),
-          current_balance: format_currency(current_balance),
-          available_balance: format_currency(available_balance),
-          currency: account.currency,
-          pending_transactions: count_pending_transactions(account.id),
-          last_updated: AccountProjection.find_by(account_id: account.id)&.updated_at
+        RETURN {
+            account_id: account.id,
+            account_number: MaskAccountNumber(account.account_number),
+            current_balance: FormatCurrency(current_balance),
+            available_balance: FormatCurrency(available_balance),
+            currency: account.currency,
+            pending_transactions: CountPendingTransactions(account.id),
+            last_updated: GET AccountProjection.updated_at 
+                         WHERE account_id = account.id
         }
-      end
-      
-      # GET /api/v1/balances/summary
-      # Mini dashboard data
-      def summary
+    
+    # GET /api/v1/balances/summary
+    # Mini dashboard data
+    FUNCTION Summary():
+        AuthenticateUser()
+        
         account = current_user.account
         
-        # Parallel queries using threads or concurrent-ruby
-        results = Concurrent::Hash.new
+        # Parallel queries using threads or async
+        results = ConcurrentMap()
         
-        threads = []
+        Spawn Task 1:
+            results.balance = BalanceCacheService.GetCurrentBalance(account.id)
         
-        threads << Thread.new do
-          results[:balance] = BalanceCacheService.current_balance(account.id)
-        end
+        Spawn Task 2:
+            results.recent_transactions = FetchRecentTransactions(account.id, 5)
         
-        threads << Thread.new do
-          results[:recent_transactions] = fetch_recent_transactions(account.id, 5)
-        end
+        Spawn Task 3:
+            results.monthly_stats = FetchMonthlyStats(account.id)
         
-        threads << Thread.new do
-          results[:monthly_stats] = fetch_monthly_stats(account.id)
-        end
+        Wait For All Tasks
         
-        threads.each(&:join)
-        
-        render json: {
-          current_balance: format_currency(results[:balance]),
-          recent_transactions: results[:recent_transactions],
-          monthly_stats: results[:monthly_stats],
-          currency: account.currency
+        RETURN {
+            current_balance: FormatCurrency(results.balance),
+            recent_transactions: results.recent_transactions,
+            monthly_stats: results.monthly_stats,
+            currency: account.currency
         }
-      end
-      
-      private
-      
-      def fetch_available_balance(account_id)
-        cache_key = "available_balance:#{account_id}"
-        cached = Redis.current.get(cache_key)
+    
+    PRIVATE
+    
+    FUNCTION FetchAvailableBalance(account_id):
+        cache_key = "available_balance:" + account_id
+        cached = Redis.GET(cache_key)
         
-        if cached
-          cached.to_d
-        else
-          projection = AccountProjection.find_by(account_id: account_id)
-          balance = projection&.available_balance || 0
-          Redis.current.setex(cache_key, 1.minute, balance.to_s)
-          balance
-        end
-      end
-      
-      def count_pending_transactions(account_id)
-        LedgerTransaction
-          .joins(:ledger_entries)
-          .where(ledger_entries: { account_id: account_id })
-          .where(status: %w[pending validated reserved])
-          .distinct
-          .count
-      end
-      
-      def fetch_recent_transactions(account_id, limit)
-        TransactionProjection
-          .where(account_id: account_id)
-          .order(posted_at: :desc)
-          .limit(limit)
-          .map { |txn| serialize_transaction(txn) }
-      end
-      
-      def fetch_monthly_stats(account_id)
-        start_of_month = Date.today.beginning_of_month
+        IF cached IS NOT NULL:
+            RETURN ConvertToDecimal(cached)
         
-        DailyBalanceSnapshot
-          .where(account_id: account_id)
-          .where('snapshot_date >= ?', start_of_month)
-          .select('SUM(total_credits) as credits, SUM(total_debits) as debits, COUNT(*) as days')
-          .first
-          .then do |stats|
-            {
-              month_to_date_credits: format_currency(stats.credits || 0),
-              month_to_date_debits: format_currency(stats.debits || 0),
-              transaction_days: stats.days || 0
-            }
-          end
-      end
-      
-      def serialize_transaction(txn)
-        {
-          id: txn.transaction_id,
-          type: txn.transaction_type,
-          amount: format_currency(txn.amount),
-          balance_after: format_currency(txn.balance_after),
-          description: txn.description,
-          counterparty: {
-            name: txn.counterparty_name,
-            icon: txn.counterparty_icon
-          },
-          posted_at: txn.posted_at.iso8601,
-          status: txn.status,
-          metadata: txn.metadata
+        projection = GET AccountProjection WHERE account_id = account_id
+        balance = IF projection IS NULL THEN 0 
+                  ELSE projection.available_balance
+        
+        Redis.SETEX(cache_key, 1 MINUTE, balance)
+        RETURN balance
+    
+    FUNCTION CountPendingTransactions(account_id):
+        RETURN COUNT(LedgerTransaction)
+            JOIN LedgerEntry ON LedgerTransaction.id = LedgerEntry.transaction_id
+            WHERE LedgerEntry.account_id = account_id
+            AND LedgerTransaction.status IN ('pending', 'validated', 'reserved')
+    
+    FUNCTION FetchRecentTransactions(account_id, limit):
+        transactions = QUERY TransactionProjection
+            WHERE account_id = account_id
+            ORDER BY posted_at DESC
+            LIMIT limit
+        
+        RETURN MAP(transactions, SerializeTransaction)
+    
+    FUNCTION FetchMonthlyStats(account_id):
+        start_of_month = FirstDayOfCurrentMonth()
+        
+        stats = QUERY DailyBalanceSnapshot
+            WHERE account_id = account_id
+            AND snapshot_date >= start_of_month
+            AGGREGATE 
+                SUM(total_credits) AS credits,
+                SUM(total_debits) AS debits,
+                COUNT(*) AS days
+        
+        RETURN {
+            month_to_date_credits: FormatCurrency(COALESCE(stats.credits, 0)),
+            month_to_date_deits: FormatCurrency(COALESCE(stats.debits, 0)),
+            transaction_days: COALESCE(stats.days, 0)
         }
-      end
-      
-      def format_currency(amount)
-        {
-          value: amount.to_f,
-          formatted: "$#{'%.2f' % amount}"
+    
+    FUNCTION SerializeTransaction(txn):
+        RETURN {
+            id: txn.transaction_id,
+            type: txn.transaction_type,
+            amount: FormatCurrency(txn.amount),
+            balance_after: FormatCurrency(txn.balance_after),
+            description: txn.description,
+            counterparty: {
+                name: txn.counterparty_name,
+                icon: txn.counterparty_icon
+            },
+            posted_at: FormatISO8601(txn.posted_at),
+            status: txn.status,
+            metadata: txn.metadata
         }
-      end
-      
-      def mask_account_number(number)
-        "****#{number.last(4)}"
-      end
-    end
-  end
-end
+    
+    FUNCTION FormatCurrency(amount):
+        RETURN {
+            value: ConvertToFloat(amount),
+            formatted: "$" + FormatToTwoDecimals(amount)
+        }
+    
+    FUNCTION MaskAccountNumber(number):
+        RETURN "****" + LastFourDigits(number)
 ```
 
 ### Transaction History with Pagination
 
-```ruby
-# app/controllers/api/v1/transactions_controller.rb
-module Api
-  module V1
-    class TransactionsController < ApplicationController
-      before_action :authenticate_user!
-      
-      # GET /api/v1/transactions
-      def index
+```
+Pseudocode - Transactions API Controller:
+
+CLASS TransactionsController:
+    
+    # GET /api/v1/transactions
+    FUNCTION Index():
+        AuthenticateUser()
+        
         account = current_user.account
         
         # Build query
-        scope = TransactionProjection.where(account_id: account.id)
+        scope = QUERY TransactionProjection WHERE account_id = account.id
         
-        # Filters
-        scope = filter_by_date_range(scope)
-        scope = filter_by_type(scope)
-        scope = filter_by_amount(scope)
+        # Apply filters
+        scope = FilterByDateRange(scope)
+        scope = FilterByType(scope)
+        scope = FilterByAmount(scope)
         
-        # Sorting
-        scope = apply_sorting(scope)
+        # Apply sorting
+        scope = ApplySorting(scope)
         
         # Pagination with cursor for large datasets
-        if params[:cursor]
-          scope = paginate_with_cursor(scope)
-        else
-          scope = paginate_with_offset(scope)
-        end
+        IF params.cursor IS SET:
+            scope = PaginateWithCursor(scope)
+        ELSE:
+            scope = PaginateWithOffset(scope)
         
-        transactions = scope.limit(page_size).to_a
+        transactions = scope.LIMIT(PageSize()).Execute()
         
-        render json: {
-          transactions: transactions.map { |t| serialize_transaction(t) },
-          pagination: build_pagination_metadata(transactions),
-          summary: build_summary(scope)
+        RETURN {
+            transactions: MAP(transactions, SerializeTransaction),
+            pagination: BuildPaginationMetadata(transactions),
+            summary: BuildSummary(scope)
         }
-      end
-      
-      # GET /api/v1/transactions/:id
-      def show
+    
+    # GET /api/v1/transactions/:id
+    FUNCTION Show():
+        AuthenticateUser()
+        
         account = current_user.account
         
-        txn = TransactionProjection.find_by!(
-          transaction_id: params[:id],
-          account_id: account.id
-        )
+        txn = GET TransactionProjection
+            WHERE transaction_id = params.id
+            AND account_id = account.id
+        
+        IF txn IS NULL:
+            THROW NotFoundError
         
         # Get full ledger details if needed
-        ledger_txn = LedgerTransaction.find(txn.transaction_id)
+        ledger_txn = GET LedgerTransaction WHERE id = txn.transaction_id
         
-        render json: {
-          transaction: serialize_transaction(txn),
-          entries: ledger_txn.ledger_entries.map do |entry|
-            {
-              account_id: entry.account_id,
-              direction: entry.direction,
-              amount: entry.amount,
-              description: entry.description
-            }
-          end,
-          status_history: ledger_txn.state_transitions.map do |transition|
-            {
-              from: transition.from_status,
-              to: transition.to_status,
-              at: transition.created_at
-            }
-          end
+        RETURN {
+            transaction: SerializeTransaction(txn),
+            entries: MAP(ledger_txn.ledger_entries, entry => {
+                account_id: entry.account_id,
+                direction: entry.direction,
+                amount: entry.amount,
+                description: entry.description
+            }),
+            status_history: MAP(ledger_txn.state_transitions, transition => {
+                from: transition.from_status,
+                to: transition.to_status,
+                at: transition.created_at
+            })
         }
-      end
-      
-      private
-      
-      def filter_by_date_range(scope)
-        return scope unless params[:start_date] || params[:end_date]
+    
+    PRIVATE
+    
+    FUNCTION FilterByDateRange(scope):
+        IF params.start_date IS SET:
+            start_date = ParseDate(params.start_date).StartOfDay()
+            scope = scope.WHERE posted_at >= start_date
         
-        if params[:start_date]
-          scope = scope.where('posted_at >= ?', Date.parse(params[:start_date]).beginning_of_day)
-        end
+        IF params.end_date IS SET:
+            end_date = ParseDate(params.end_date).EndOfDay()
+            scope = scope.WHERE posted_at <= end_date
         
-        if params[:end_date]
-          scope = scope.where('posted_at <= ?', Date.parse(params[:end_date]).end_of_day)
-        end
+        RETURN scope
+    
+    FUNCTION FilterByType(scope):
+        IF params.type IS SET:
+            types = Split(params.type, ",")
+            scope = scope.WHERE transaction_type IN types
         
-        scope
-      end
-      
-      def filter_by_type(scope)
-        return scope unless params[:type]
+        RETURN scope
+    
+    FUNCTION FilterByAmount(scope):
+        IF params.min_amount IS SET:
+            scope = scope.WHERE amount >= ConvertToDecimal(params.min_amount)
         
-        scope.where(transaction_type: params[:type].split(','))
-      end
-      
-      def filter_by_amount(scope)
-        return scope unless params[:min_amount] || params[:max_amount]
+        IF params.max_amount IS SET:
+            scope = scope.WHERE amount <= ConvertToDecimal(params.max_amount)
         
-        if params[:min_amount]
-          scope = scope.where('amount >= ?', params[:min_amount].to_d)
-        end
+        RETURN scope
+    
+    FUNCTION ApplySorting(scope):
+        sort_by = COALESCE(params.sort_by, 'posted_at')
+        sort_order = COALESCE(params.sort_order, 'desc')
         
-        if params[:max_amount]
-          scope = scope.where('amount <= ?', params[:max_amount].to_d)
-        end
+        RETURN scope.ORDER_BY(sort_by + " " + sort_order)
+    
+    FUNCTION PaginateWithCursor(scope):
+        cursor = DeserializeCursor(params.cursor)
         
-        scope
-      end
-      
-      def apply_sorting(scope)
-        sort_by = params[:sort_by] || 'posted_at'
-        sort_order = params[:sort_order] || 'desc'
+        RETURN scope.WHERE(
+            posted_at < cursor.posted_at
+            OR (
+                posted_at = cursor.posted_at 
+                AND created_at < cursor.created_at
+            )
+        )
+    
+    FUNCTION PaginateWithOffset(scope):
+        offset = (params.page - 1) * PageSize()
+        RETURN scope.OFFSET(offset)
+    
+    FUNCTION PageSize():
+        requested = params.per_page
+        RETURN CLAMP(requested, 1, 100)
+    
+    FUNCTION BuildPaginationMetadata(transactions):
+        IF transactions IS EMPTY:
+            RETURN { has_more: FALSE }
         
-        scope.order("#{sort_by} #{sort_order}")
-      end
-      
-      def paginate_with_cursor(scope)
-        cursor = JSON.parse(Base64.decode64(params[:cursor]))
+        last_txn = LAST(transactions)
         
-        scope.where('posted_at < ? OR (posted_at = ? AND created_at < ?)',
-                    cursor['posted_at'],
-                    cursor['posted_at'],
-                    cursor['created_at'])
-      end
-      
-      def paginate_with_offset(scope)
-        offset = (params[:page].to_i - 1) * page_size
-        scope.offset(offset)
-      end
-      
-      def page_size
-        [params[:per_page].to_i, 100].min.clamp(1, 100)
-      end
-      
-      def build_pagination_metadata(transactions)
-        return { has_more: false } if transactions.empty?
-        
-        last_txn = transactions.last
-        
-        {
-          has_more: has_more_pages?(last_txn),
-          next_cursor: encode_cursor(last_txn),
-          total_count: total_count_estimate
+        RETURN {
+            has_more: HasMorePages(last_txn),
+            next_cursor: EncodeCursor(last_txn),
+            total_count: EstimateTotalCount()
         }
-      end
-      
-      def has_more_pages?(last_transaction)
-        TransactionProjection
-          .where(account_id: last_transaction.account_id)
-          .where('posted_at < ? OR (posted_at = ? AND created_at < ?)',
-                 last_transaction.posted_at,
-                 last_transaction.posted_at,
-                 last_transaction.created_at)
-          .exists?
-      end
-      
-      def encode_cursor(transaction)
-        Base64.encode64({
-          posted_at: transaction.posted_at,
-          created_at: transaction.created_at
-        }.to_json)
-      end
-      
-      def total_count_estimate
-        # Use PostgreSQL's estimated count for performance
-        # or cached count for exact numbers
-        "~#{TransactionProjection.where(account_id: current_user.account.id).count}"
-      end
-      
-      def build_summary(scope)
-        {
-          total_count: scope.count,
-          total_credits: scope.where(transaction_type: 'credit').sum(:amount),
-          total_debits: scope.where(transaction_type: 'debit').sum(:amount)
+    
+    FUNCTION HasMorePages(last_transaction):
+        RETURN EXISTS TransactionProjection
+            WHERE account_id = last_transaction.account_id
+            AND (
+                posted_at < last_transaction.posted_at
+                OR (
+                    posted_at = last_transaction.posted_at
+                    AND created_at < last_transaction.created_at
+                )
+            )
+    
+    FUNCTION EncodeCursor(transaction):
+        cursor_data = {
+            posted_at: transaction.posted_at,
+            created_at: transaction.created_at
         }
-      end
-      
-      def serialize_transaction(txn)
-        {
-          id: txn.transaction_id,
-          type: txn.transaction_type,
-          amount: {
-            value: txn.amount.to_f,
-            formatted: "$#{'%.2f' % txn.amount}"
-          },
-          balance_after: {
-            value: txn.balance_after.to_f,
-            formatted: "$#{'%.2f' % txn.balance_after}"
-          },
-          description: txn.description,
-          counterparty: {
-            name: txn.counterparty_name,
-            icon: txn.counterparty_icon
-          },
-          posted_at: txn.posted_at.iso8601,
-          status: txn.status,
-          metadata: txn.metadata
+        RETURN Base64Encode(SerializeToJSON(cursor_data))
+    
+    FUNCTION EstimateTotalCount():
+        # Use database estimate or cached count
+        count = QUERY TransactionProjection
+            WHERE account_id = current_user.account.id
+            RETURN COUNT(*)
+        RETURN "~" + count
+    
+    FUNCTION BuildSummary(scope):
+        RETURN {
+            total_count: scope.COUNT(),
+            total_credits: scope
+                .WHERE transaction_type = 'credit'
+                .SUM(amount),
+            total_debits: scope
+                .WHERE transaction_type = 'debit'
+                .SUM(amount)
         }
-      end
-    end
-  end
-end
+    
+    FUNCTION SerializeTransaction(txn):
+        RETURN {
+            id: txn.transaction_id,
+            type: txn.transaction_type,
+            amount: {
+                value: ConvertToFloat(txn.amount),
+                formatted: "$" + FormatToTwoDecimals(txn.amount)
+            },
+            balance_after: {
+                value: ConvertToFloat(txn.balance_after),
+                formatted: "$" + FormatToTwoDecimals(txn.balance_after)
+            },
+            description: txn.description,
+            counterparty: {
+                name: txn.counterparty_name,
+                icon: txn.counterparty_icon
+            },
+            posted_at: FormatISO8601(txn.posted_at),
+            status: txn.status,
+            metadata: txn.metadata
+        }
 ```
 
 ## Layer 5: Advanced Query Patterns
@@ -960,144 +962,137 @@ end
 
 Users want charts showing balance over time. Don't calculate this on the fly—use pre-aggregated data:
 
-```ruby
-# app/services/balance_chart_service.rb
-class BalanceChartService
-  def self.balance_over_time(account_id, period: '30d', granularity: 'daily')
-    case granularity
-    when 'hourly'
-      hourly_balance_chart(account_id, period)
-    when 'daily'
-      daily_balance_chart(account_id, period)
-    when 'weekly'
-      weekly_balance_chart(account_id, period)
-    when 'monthly'
-      monthly_balance_chart(account_id, period)
-    end
-  end
-  
-  private
-  
-  def self.daily_balance_chart(account_id, period)
-    days = period_to_days(period)
-    start_date = days.days.ago.to_date
+```
+Pseudocode - Balance Chart Service:
+
+CLASS BalanceChartService:
     
-    # Use snapshots for efficiency
-    snapshots = DailyBalanceSnapshot
-      .where(account_id: account_id)
-      .where('snapshot_date >= ?', start_date)
-      .order(snapshot_date: :asc)
+    FUNCTION BalanceOverTime(account_id, period='30d', granularity='daily'):
+        SWITCH granularity:
+            CASE 'hourly':
+                RETURN HourlyBalanceChart(account_id, period)
+            CASE 'daily':
+                RETURN DailyBalanceChart(account_id, period)
+            CASE 'weekly':
+                RETURN WeeklyBalanceChart(account_id, period)
+            CASE 'monthly':
+                RETURN MonthlyBalanceChart(account_id, period)
     
-    # If no snapshots exist yet, calculate from projections
-    if snapshots.empty?
-      calculate_from_projections(account_id, start_date)
-    else
-      snapshots.map do |snapshot|
-        {
-          date: snapshot.snapshot_date,
-          balance: snapshot.closing_balance.to_f,
-          credits: snapshot.total_credits.to_f,
-          debits: snapshot.total_debits.to_f
-        }
-      end
-    end
-  end
-  
-  def self.calculate_from_projections(account_id, start_date)
-    # Get current balance
-    current = AccountProjection.find_by(account_id: account_id)
+    PRIVATE
     
-    # Walk backwards through transactions (slower but works without snapshots)
-    transactions = TransactionProjection
-      .where(account_id: account_id)
-      .where('posted_at >= ?', start_date.beginning_of_day)
-      .order(posted_at: :desc)
+    FUNCTION DailyBalanceChart(account_id, period):
+        days = PeriodToDays(period)
+        start_date = DaysAgo(days)
+        
+        # Use snapshots for efficiency
+        snapshots = QUERY DailyBalanceSnapshot
+            WHERE account_id = account_id
+            AND snapshot_date >= start_date
+            ORDER BY snapshot_date ASC
+        
+        # If no snapshots exist yet, calculate from projections
+        IF snapshots IS EMPTY:
+            RETURN CalculateFromProjections(account_id, start_date)
+        
+        RETURN MAP(snapshots, snapshot => {
+            date: snapshot.snapshot_date,
+            balance: ConvertToFloat(snapshot.closing_balance),
+            credits: ConvertToFloat(snapshot.total_credits),
+            debits: ConvertToFloat(snapshot.total_debits)
+        })
     
-    # Build chart data by day
-    data_by_day = transactions.group_by { |t| t.posted_at.to_date }
+    FUNCTION CalculateFromProjections(account_id, start_date):
+        # Get current balance
+        current = GET AccountProjection WHERE account_id = account_id
+        
+        # Walk backwards through transactions (slower but works without snapshots)
+        transactions = QUERY TransactionProjection
+            WHERE account_id = account_id
+            AND posted_at >= StartOfDay(start_date)
+            ORDER BY posted_at DESC
+        
+        # Build chart data by day
+        data_by_day = GroupBy(transactions, t => Date(t.posted_at))
+        
+        balance = current.current_balance
+        chart_data = []
+        
+        FOR date IN Range(start_date, Today()).Reverse():
+            day_transactions = data_by_day[date] OR []
+            
+            day_credits = SUM(
+                day_transactions
+                WHERE transaction_type = 'credit'
+            )
+            
+            day_debits = SUM(
+                day_transactions
+                WHERE transaction_type = 'debit'
+            )
+            
+            PREPEND chart_data, {
+                date: date,
+                balance: ConvertToFloat(balance),
+                credits: ConvertToFloat(day_credits),
+                debits: ConvertToFloat(day_debits)
+            }
+            
+            # Walk balance backwards
+            balance = balance - (day_credits - day_debits)
+        
+        RETURN chart_data
     
-    balance = current.current_balance
-    chart_data = []
-    
-    (start_date..Date.today).reverse_each do |date|
-      day_transactions = data_by_day[date] || []
-      
-      day_credits = day_transactions.select { |t| t.transaction_type == 'credit' }.sum(&:amount)
-      day_debits = day_transactions.select { |t| t.transaction_type == 'debit' }.sum(&:amount)
-      
-      chart_data.unshift({
-        date: date,
-        balance: balance.to_f,
-        credits: day_credits.to_f,
-        debits: day_debits.to_f
-      })
-      
-      # Walk balance backwards
-      balance -= (day_credits - day_debits)
-    end
-    
-    chart_data
-  end
-  
-  def self.period_to_days(period)
-    case period
-    when '7d' then 7
-    when '30d' then 30
-    when '90d' then 90
-    when '1y' then 365
-    else 30
-    end
-  end
-end
+    FUNCTION PeriodToDays(period):
+        SWITCH period:
+            CASE '7d': RETURN 7
+            CASE '30d': RETURN 30
+            CASE '90d': RETURN 90
+            CASE '1y': RETURN 365
+            DEFAULT: RETURN 30
 ```
 
 ### Search and Filtering
 
-```ruby
-# app/services/transaction_search_service.rb
-class TransactionSearchService
-  def self.search(account_id, query:, filters: {})
-    scope = TransactionProjection.where(account_id: account_id)
+```
+Pseudocode - Transaction Search Service:
+
+CLASS TransactionSearchService:
     
-    # Full-text search on description and counterparty
-    if query.present?
-      scope = scope.where(
-        "description ILIKE ? OR counterparty_name ILIKE ?",
-        "%#{query}%",
-        "%#{query}%"
-      )
-    end
+    FUNCTION Search(account_id, query='', filters={}):
+        scope = QUERY TransactionProjection WHERE account_id = account_id
+        
+        # Full-text search on description and counterparty
+        IF query IS NOT EMPTY:
+            scope = scope.WHERE(
+                description CONTAINS query
+                OR counterparty_name CONTAINS query
+            )
+        
+        # Apply filters
+        scope = ApplyFilters(scope, filters)
+        
+        RETURN scope
+            .ORDER_BY posted_at DESC
+            .LIMIT(100)
+            .Execute()
     
-    # Apply filters
-    scope = apply_filters(scope, filters)
-    
-    scope.order(posted_at: :desc).limit(100)
-  end
-  
-  def self.apply_filters(scope, filters)
-    if filters[:type]
-      scope = scope.where(transaction_type: filters[:type])
-    end
-    
-    if filters[:min_amount]
-      scope = scope.where('amount >= ?', filters[:min_amount])
-    end
-    
-    if filters[:max_amount]
-      scope = scope.where('amount <= ?', filters[:max_amount])
-    end
-    
-    if filters[:date_from]
-      scope = scope.where('posted_at >= ?', filters[:date_from])
-    end
-    
-    if filters[:date_to]
-      scope = scope.where('posted_at <= ?', filters[:date_to])
-    end
-    
-    scope
-  end
-end
+    FUNCTION ApplyFilters(scope, filters):
+        IF filters.type IS SET:
+            scope = scope.WHERE transaction_type = filters.type
+        
+        IF filters.min_amount IS SET:
+            scope = scope.WHERE amount >= filters.min_amount
+        
+        IF filters.max_amount IS SET:
+            scope = scope.WHERE amount <= filters.max_amount
+        
+        IF filters.date_from IS SET:
+            scope = scope.WHERE posted_at >= filters.date_from
+        
+        IF filters.date_to IS SET:
+            scope = scope.WHERE posted_at <= filters.date_to
+        
+        RETURN scope
 ```
 
 ## The Production Checklist

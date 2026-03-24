@@ -53,199 +53,210 @@ The **Pending → Validated → Reserved → Posted** flow matters because:
 
 This state machine lets you handle async operations. When you call a payment processor, the transaction might sit in "Reserved" for seconds (or hours) while waiting for confirmation. Your ledger needs to handle that gracefully.
 
-### Real-World Rails Implementation
+### Implementation Overview
 
-Here's a complete implementation of the transaction lifecycle using Rails and Sidekiq for async processing. This example handles payments through Stripe.
+Here's how to implement transaction lifecycle management with state machines and async processing.
 
-#### Step 1: Enhanced Transaction Model with State Machine
+#### State Machine Architecture
 
-```ruby
-# app/models/ledger_transaction.rb
-class LedgerTransaction < ApplicationRecord
-  has_many :ledger_entries, dependent: :destroy
-  has_many :accounts, through: :ledger_entries
-  
-  validates :external_ref, uniqueness: true, allow_nil: true
-  validates :status, inclusion: { in: %w[pending validated reserved posted rejected reversed failed] }
-  
-  # State transitions - defines valid paths
-  VALID_TRANSITIONS = {
-    'pending' => %w[validated rejected],
-    'validated' => %w[reserved rejected],
-    'reserved' => %w[posted failed],
-    'posted' => %w[reversed],
-    'rejected' => [],
-    'failed' => [],
-    'reversed' => []
-  }.freeze
-  
-  # Scope for finding stale transactions
-  scope :stale, ->(older_than: 1.hour) { where('updated_at < ?', older_than.ago) }
-  scope :in_progress, -> { where(status: %w[pending validated reserved]) }
-  scope :completed, -> { where(status: %w[posted rejected reversed]) }
-  
-  # Transition to new state with validation
-  def transition_to!(new_status, metadata = {})
-    unless can_transition_to?(new_status)
-      raise InvalidStateTransition, "Cannot transition from #{status} to #{new_status}"
-    end
+```mermaid
+stateDiagram-v2
+    [*] --> Pending: Create Transaction
     
-    old_status = status
+    Pending --> Validating: Start Validation
+    Validating --> Validated: Validation Pass
+    Validating --> Rejected: Validation Fail
     
-    ActiveRecord::Base.transaction do
-      update!(
-        status: new_status,
-        status_changed_at: Time.current,
-        metadata: (self.metadata || {}).merge(metadata)
-      )
-      
-      # Log the transition
-      StateTransition.create!(
-        ledger_transaction: self,
-        from_status: old_status,
-        to_status: new_status,
-        metadata: metadata
-      )
-    end
+    Validated --> Reserving: Reserve Funds
+    Reserving --> Reserved: Funds Reserved
+    Reserving --> Failed: Insufficient Funds
     
-    # Trigger side effects based on new state
-    trigger_state_side_effects(new_status, old_status)
-  end
-  
-  def can_transition_to?(new_status)
-    VALID_TRANSITIONS[status]&.include?(new_status)
-  end
-  
-  def terminal_state?
-    %w[posted rejected reversed failed].include?(status)
-  end
-  
-  def in_progress?
-    %w[pending validated reserved].include?(status)
-  end
-  
-  private
-  
-  def trigger_state_side_effects(new_status, old_status)
-    case new_status
-    when 'posted'
-      LedgerTransactionPostedEvent.publish(self)
-    when 'failed', 'rejected'
-      LedgerTransactionFailedEvent.publish(self)
-    end
-  end
-end
+    Reserved --> Posting: External Confirm
+    Posting --> Posted: Post Success
+    Posting --> Failed: Post Error
+    
+    Posted --> Reversing: Reverse Request
+    Reversing --> Reversed: Reverse Complete
+    
+    Rejected --> [*]
+    Failed --> [*]
+    Reversed --> [*]
+    Posted --> [*]
+```
 
-# Migration for state transitions audit trail
-class CreateStateTransitions < ActiveRecord::Migration[7.0]
-  def change
-    create_table :state_transitions do |t|
-      t.references :ledger_transaction, null: false, foreign_key: true
-      t.string :from_status, null: false
-      t.string :to_status, null: false
-      t.jsonb :metadata
-      t.timestamps
-      
-      t.index [:ledger_transaction_id, :created_at]
-    end
+##### State Transition Rules
+
+```pseudocode
+// Define valid transitions as a state machine map
+VALID_TRANSITIONS = {
+  "pending":    ["validated", "rejected"],
+  "validated":  ["reserved", "rejected"],
+  "reserved":   ["posted", "failed"],
+  "posted":     ["reversed"],
+  "rejected":   [],
+  "failed":     [],
+  "reversed":   []
+}
+
+function canTransition(currentStatus, newStatus):
+  allowed = VALID_TRANSITIONS[currentStatus]
+  return newStatus in allowed
+
+function transition(transaction, newStatus, metadata):
+  if not canTransition(transaction.status, newStatus):
+    throw InvalidTransitionError(
+      "Cannot transition from ${transaction.status} to ${newStatus}"
+    )
+  
+  oldStatus = transaction.status
+  
+  within DBTransaction:
+    // Update transaction status
+    transaction.status = newStatus
+    transaction.status_changed_at = now()
+    transaction.metadata = merge(transaction.metadata, metadata)
+    updateTransaction(transaction)
     
-    add_column :ledger_transactions, :status_changed_at, :datetime
-    add_index :ledger_transactions, [:status, :status_changed_at]
-  end
-end
+    // Log the transition for audit trail
+    createStateTransition({
+      transaction_id: transaction.id,
+      from_status: oldStatus,
+      to_status: newStatus,
+      metadata: metadata,
+      created_at: now()
+    })
+  
+  // Trigger side effects after commit
+  triggerSideEffects(newStatus, transaction)
+  
+  return transaction
+
+function triggerSideEffects(newStatus, transaction):
+  switch newStatus:
+    case "posted":
+      publishEvent("transaction.posted", transaction)
+      break
+    case "failed":
+    case "rejected":
+      publishEvent("transaction.failed", transaction)
+      break
+    case "reserved":
+      // Queue external payment call
+      enqueueJob("process_payment", transaction.id)
+      break
+```
+
+##### State Transition Audit Table
+
+```
+Table StateTransition {
+  id: UUID PK
+  transaction_id: UUID FK -> LedgerTransaction
+  from_status: String
+  to_status: String
+  metadata: JSON
+  created_at: Timestamp
+  
+  INDEX: (transaction_id, created_at)
+}
 ```
 
 #### Step 2: Transaction Lifecycle Service
 
-```ruby
-# app/services/ledger/transaction_lifecycle_service.rb
-module Ledger
-  class TransactionLifecycleService
-    def initialize(transaction)
-      @transaction = transaction
-      @stripe = Stripe::Client.new
-    end
+```pseudocode
+// Transaction Lifecycle Service
+// Orchestrates transactions through the state machine
+
+function processTransaction(transaction):
+  log("Processing transaction ${transaction.id}, current state: ${transaction.status}")
+  
+  switch transaction.status:
+    case "pending":
+      return validateTransaction(transaction)
+    case "validated":
+      return reserveFunds(transaction)
+    case "reserved":
+      return postToLedger(transaction)
+    default:
+      log("Transaction ${transaction.id} in unexpected state: ${transaction.status}")
+      return { success: false, error: "Unexpected state" }
+  
+  catch error:
+    log("Error processing transaction ${transaction.id}: ${error.message}")
+    return handleProcessingError(transaction, error)
+
+// Step 1: Validate the transaction
+function validateTransaction(transaction):
+  log("Validating transaction ${transaction.id}")
+  
+  try:
+    // Extract entries from transaction
+    entries = transaction.entries.map(e => ({
+      account_id: e.account_id,
+      direction: e.direction,
+      amount: e.amount,
+      currency: e.currency
+    }))
     
-    # Main entry point - processes transaction through lifecycle
-    def process
-      Rails.logger.info "Processing transaction #{@transaction.id} (current state: #{@transaction.status})"
-      
-      case @transaction.status
-      when 'pending'
-        validate_transaction
-      when 'validated'
-        reserve_funds
-      when 'reserved'
-        post_to_ledger
-      else
-        Rails.logger.warn "Transaction #{@transaction.id} in unexpected state: #{@transaction.status}"
-      end
-    rescue StandardError => e
-      Rails.logger.error "Error processing transaction #{@transaction.id}: #{e.message}"
-      handle_processing_error(e)
-    end
+    // Run validation (from Chapter 1)
+    accounts = validateTransaction(entries, transaction.external_ref)
     
-    # Step 1: Validate the transaction
-    def validate_transaction
-      Rails.logger.info "Validating transaction #{@transaction.id}"
-      
-      validator = TransactionValidator.new
-      accounts = validator.validate!(
-        @transaction.ledger_entries.map { |e| 
-          { 
-            account_id: e.account_id, 
-            direction: e.direction, 
-            amount: e.amount, 
-            currency: e.currency 
-          } 
-        },
-        external_ref: @transaction.external_ref
-      )
-      
-      @transaction.transition_to!('validated', validated_at: Time.current)
-      
-      # Queue next step
-      ProcessTransactionJob.perform_later(@transaction.id)
-      
-      { success: true, status: 'validated' }
-      
-    rescue ValidationError => e
-      Rails.logger.error "Validation failed for transaction #{@transaction.id}: #{e.message}"
-      @transaction.transition_to!('rejected', rejection_reason: e.message)
-      
-      # Notify user
-      TransactionFailedMailer.validation_failed(@transaction).deliver_later
-      
-      { success: false, error: e.message }
-    end
+    // Transition to validated state
+    transition(transaction, "validated", { validated_at: now() })
     
-    # Step 2: Reserve funds (hold the money)
-    def reserve_funds
-      Rails.logger.info "Reserving funds for transaction #{@transaction.id}"
-      
-      ActiveRecord::Base.transaction do
-        # Lock all accounts involved
-        account_ids = @transaction.ledger_entries.pluck(:account_id).sort
-        accounts = Account.where(id: account_ids).order(:id).lock.to_a
-        
-        accounts_by_id = accounts.index_by(&:id)
-        
-        # Verify funds still available after lock
-        @transaction.ledger_entries.each do |entry|
-          next unless entry.direction == 'debit'
-          
-          account = accounts_by_id[entry.account_id]
-          if account.balance < entry.amount
-            raise InsufficientFundsError, 
-              "Insufficient funds in account #{account.account_number}"
-          end
-        end
-        
-        # Create reservations (decrement available balance)
-        @transaction.ledger_entries.each do |entry|
-          next unless entry.direction == 'debit'
-          
-          account = accounts_by_id[entry.account_id]
+    // Queue next step (reservation)
+    enqueueJob("reserve_funds", transaction.id)
+    
+    return { success: true, status: "validated" }
+    
+  catch ValidationError:
+    log("Validation failed: ${error.message}")
+    transition(transaction, "rejected", { rejection_reason: error.message })
+    notifyUser(transaction, "validation_failed")
+    return { success: false, error: error.message }
+
+// Step 2: Reserve funds (hold the money)
+function reserveFunds(transaction):
+  log("Reserving funds for transaction ${transaction.id}")
+  
+  within DBTransaction:
+    // Lock all accounts involved (sorted to prevent deadlocks)
+    accountIds = transaction.entries
+      .map(e => e.account_id)
+      .sort()
+    
+    accounts = acquireLocks(accountIds)
+    accountsById = indexBy(accounts, "id")
+    
+    // Verify funds still available after lock
+    for entry in transaction.entries:
+      if entry.direction == "debit":
+        account = accountsById[entry.account_id]
+        if account.balance < entry.amount:
+          throw InsufficientFundsError(
+            "Insufficient funds in account ${account.account_number}"
+          )
+    
+    // Create reservations - decrement available_balance
+    // but keep balance unchanged until posting
+    for entry in transaction.entries:
+      if entry.direction == "debit":
+        account = accountsById[entry.account_id]
+        account.available_balance -= entry.amount
+        updateAccount(account)
+    
+    // Mark transaction as reserved
+    transition(transaction, "reserved", { reserved_at: now() })
+  
+  // Queue external payment processing
+  enqueueJob("process_payment", transaction.id)
+  
+  return { success: true, status: "reserved" }
+  
+  catch InsufficientFundsError:
+    log("Reservation failed: ${error.message}")
+    transition(transaction, "failed", { failure_reason: error.message })
+    return { success: false, error: error.message }
           
           Reservation.create!(
             account: account,
@@ -394,379 +405,335 @@ module Ledger
     def release_reservations
       Reservation.where(ledger_transaction: @transaction).each do |reservation|
         account = reservation.account
-        account.update!(
-          available_balance: account.available_balance + reservation.amount
-        )
-        reservation.destroy
+        account.available_balance += reservation.amount
+        updateAccount(account)
+        deleteReservation(reservation)
       end
     end
   end
 end
 
-# app/models/reservation.rb
-class Reservation < ApplicationRecord
-  belongs_to :account
-  belongs_to :ledger_transaction
+// Reservation Model Schema
+Table Reservation {
+  id: UUID PK
+  account_id: UUID FK -> Account
+  transaction_id: UUID FK -> LedgerTransaction
+  amount: Decimal(15,2)
+  expires_at: Timestamp
+  created_at: Timestamp
   
-  validates :amount, numericality: { greater_than: 0 }
-  validates :expires_at, presence: true
-  
-  scope :expired, -> { where('expires_at < ?', Time.current) }
-  scope :active, -> { where('expires_at >= ?', Time.current) }
-  
-  def expired?
-    expires_at < Time.current
-  end
-end
+  INDEX: (account_id, expires_at)
+  INDEX: (transaction_id)
+}
 ```
 
-#### Step 3: Background Jobs for Async Processing
+#### Step 3: Async Processing Architecture
 
-```ruby
-# app/jobs/ledger/process_transaction_job.rb
-module Ledger
-  class ProcessTransactionJob < ApplicationJob
-    queue_as :ledger_transactions
-    
-    # Retry with exponential backoff for transient failures
-    retry_on StandardError, wait: :polynomially_longer, attempts: 5
-    
-    # Don't retry validation errors
-    discard_on Ledger::ValidationError
-    
-    def perform(transaction_id)
-      transaction = LedgerTransaction.find(transaction_id)
-      
-      # Skip if already completed
-      return if transaction.terminal_state?
-      
-      service = TransactionLifecycleService.new(transaction)
-      service.process
-    end
-  end
-end
-
-# app/jobs/ledger/payment_gateway_job.rb
-module Ledger
-  class PaymentGatewayJob < ApplicationJob
-    queue_as :payment_gateway
-    
-    # Longer retry for payment gateway issues
-    retry_on Stripe::APIError, wait: 5.minutes, attempts: 10
-    
-    def perform(transaction_id)
-      transaction = LedgerTransaction.find(transaction_id)
-      
-      # Only process if in reserved state
-      return unless transaction.reserved?
-      
-      begin
-        # Call Stripe to process payment
-        stripe_charge = create_stripe_charge(transaction)
-        
-        if stripe_charge.status == 'succeeded'
-          # Payment succeeded - post to ledger
-          service = TransactionLifecycleService.new(transaction)
-          service.post_to_ledger
-        else
-          # Payment failed
-          transaction.transition_to!('failed', 
-            failure_reason: "Stripe charge failed: #{stripe_charge.failure_message}"
-          )
-        end
-        
-      rescue Stripe::CardError => e
-        # Card declined - fail the transaction
-        transaction.transition_to!('failed', 
-          failure_reason: "Card declined: #{e.message}"
-        )
-        
-        # Notify user
-        TransactionFailedMailer.card_declined(transaction, e.message).deliver_later
-      end
+```mermaid
+flowchart TB
+    subgraph "Transaction Processing Pipeline"
+        API["API Request"] --> Create["Create Pending Transaction"]
+        Create --> Queue1["Queue: Validate"]
+        Queue1 --> Validate["Validate Transaction"]
+        Validate --> Queue2["Queue: Reserve"]
+        Queue2 --> Reserve["Reserve Funds"]
+        Reserve --> Queue3["Queue: External Payment"]
+        Queue3 --> External["Call Payment Gateway"]
+        External -->|Success| Post["Post to Ledger"]
+        External -->|Failure| Fail["Mark Failed"]
     end
     
-    private
+    subgraph "Background Jobs"
+        Sweep["Sweeper Job<br/>Every 10 min"]
+        Notify["Notification Job"]
+    end
     
-    def create_stripe_charge(transaction)
-      # Find the debit entry to get amount
-      debit_entry = transaction.ledger_entries.find_by(direction: 'debit')
-      
-      Stripe::Charge.create({
-        amount: (debit_entry.amount * 100).to_i, # Convert to cents
-        currency: debit_entry.currency.downcase,
-        source: transaction.metadata['stripe_token'],
-        description: transaction.description,
-        metadata: {
-          transaction_id: transaction.id,
-          external_ref: transaction.external_ref
-        }
+    Sweep -->|Find stale| Create
+    Post --> Notify
+    Fail --> Notify
+```
+
+```pseudocode
+// Job Queue Definitions
+enum JobType {
+  PROCESS_TRANSACTION,      // Process through lifecycle
+  PROCESS_PAYMENT_GATEWAY,  // External payment call
+  SWEEP_STALE_TRANSACTIONS, // Cleanup job
+  SEND_NOTIFICATION
+}
+
+// Process Transaction Job
+function processTransactionJob(transactionId):
+  transaction = loadTransaction(transactionId)
+  
+  // Skip if already in terminal state
+  if isTerminalState(transaction.status):
+    log("Skipping - already completed")
+    return
+  
+  try:
+    processTransaction(transaction)
+  catch ValidationError:
+    // Don't retry validation errors - they won't succeed
+    log("Validation failed, not retrying")
+    discardJob()
+  catch TransientError:
+    // Retry with exponential backoff
+    retryJob(attempts: 5, backoff: exponential)
+
+// Payment Gateway Job
+function paymentGatewayJob(transactionId):
+  transaction = loadTransaction(transactionId)
+  
+  // Only process if in reserved state
+  if transaction.status != "reserved":
+    return
+  
+  try:
+    // Call external payment processor
+    result = callPaymentGateway({
+      amount: transaction.amount,
+      currency: transaction.currency,
+      token: transaction.metadata.payment_token,
+      reference: transaction.external_ref
+    })
+    
+    if result.status == "succeeded":
+      postToLedger(transaction)
+    else:
+      transition(transaction, "failed", {
+        failure_reason: result.failure_message
       })
-    end
-  end
-end
+      notifyUser(transaction, "payment_failed")
+      
+  catch CardDeclinedError:
+    transition(transaction, "failed", {
+      failure_reason: "Card declined"
+    })
+    notifyUser(transaction, "card_declined")
+  catch PaymentGatewayError:
+    // Retry for gateway issues
+    retryJob(attempts: 10, wait: 5.minutes)
 
-# app/jobs/ledger/stale_transaction_sweeper_job.rb
-module Ledger
-  # Sweeps old pending/reserved transactions that got stuck
-  class StaleTransactionSweeperJob < ApplicationJob
-    queue_as :maintenance
-    
-    def perform(older_than: 1.hour)
-      # Find stale pending transactions
-      stale_pending = LedgerTransaction
-        .where(status: 'pending')
-        .stale(older_than: older_than)
-      
-      stale_pending.each do |txn|
-        Rails.logger.info "Auto-rejecting stale pending transaction #{txn.id}"
-        txn.transition_to!('rejected', 
-          rejection_reason: 'Transaction timed out - no action taken within time limit'
-        )
-      end
-      
-      # Find stale reserved transactions
-      stale_reserved = LedgerTransaction
-        .where(status: 'reserved')
-        .stale(older_than: older_than)
-      
-      stale_reserved.each do |txn|
-        Rails.logger.info "Auto-failing stale reserved transaction #{txn.id}"
-        
-        service = TransactionLifecycleService.new(txn)
-        service.handle_processing_error(
-          StandardError.new('Transaction reservation expired')
-        )
-      end
-      
-      # Clean up expired reservations
-      expired_reservations = Reservation.expired
-      count = expired_reservations.count
-      
-      expired_reservations.each do |reservation|
-        account = reservation.account
-        account.update!(
-          available_balance: account.available_balance + reservation.amount
-        )
-        reservation.destroy
-      end
-      
-      Rails.logger.info "Sweeper completed: #{stale_pending.count} pending, #{stale_reserved.count} reserved auto-closed, #{count} reservations released"
-    end
-  end
-end
+// Stale Transaction Sweeper
+function staleTransactionSweeper(olderThan: 1.hour):
+  // Find stale pending transactions
+  stalePending = findTransactions({
+    status: "pending",
+    updated_at: < now() - olderThan
+  })
+  
+  for txn in stalePending:
+    log("Auto-rejecting stale pending: ${txn.id}")
+    transition(txn, "rejected", {
+      rejection_reason: "Transaction timed out"
+    })
+  
+  // Find stale reserved transactions
+  staleReserved = findTransactions({
+    status: "reserved",
+    updated_at: < now() - olderThan
+  })
+  
+  for txn in staleReserved:
+    log("Auto-failing stale reserved: ${txn.id}")
+    handleProcessingError(txn, "Reservation expired")
+  
+  // Clean up expired reservations
+  expiredReservations = findReservations({
+    expires_at: < now()
+  })
+  
+  for reservation in expiredReservations:
+    account = loadAccount(reservation.account_id)
+    account.available_balance += reservation.amount
+    updateAccount(account)
+    deleteReservation(reservation)
+  
+  log("Sweeper: ${stalePending.count} pending, ${staleReserved.count} reserved, ${expiredReservations.count} reservations cleaned")
 ```
 
 #### Step 4: Usage Examples
 
-```ruby
-# Example 1: Processing a payment through the full lifecycle
-class PaymentsController < ApplicationController
-  def create
-    # Create transaction in pending state
-    transaction = LedgerTransaction.create!(
-      external_ref: "payment:#{current_user.id}:#{SecureRandom.hex(8)}",
-      status: 'pending',
-      description: "Payment for order #{params[:order_id]}",
-      metadata: {
-        stripe_token: params[:stripe_token],
-        order_id: params[:order_id],
-        user_id: current_user.id
-      }
-    )
-    
-    # Create entries
-    debit_account = current_user.accounts.find(params[:account_id])
-    credit_account = Account.find_by!(account_number: 'revenue_sales')
-    
-    LedgerEntry.create!(
-      ledger_transaction: transaction,
-      account: debit_account,
-      direction: 'debit',
-      amount: params[:amount],
-      currency: 'USD'
-    )
-    
-    LedgerEntry.create!(
-      ledger_transaction: transaction,
-      account: credit_account,
-      direction: 'credit',
-      amount: params[:amount],
-      currency: 'USD'
-    )
-    
-    # Kick off lifecycle processing
-    Ledger::ProcessTransactionJob.perform_later(transaction.id)
-    
-    render json: {
-      transaction_id: transaction.id,
-      status: transaction.status,
-      message: 'Payment processing initiated'
-    }
-  end
+```pseudocode
+// Example 1: Creating and processing a payment
+function createPayment(userId, accountId, amount, orderId, paymentToken):
+  // Create transaction in pending state
+  externalRef = "payment:${userId}:${generateId()}"
   
-  def show
-    transaction = LedgerTransaction.find(params[:id])
-    
-    render json: {
-      id: transaction.id,
-      status: transaction.status,
-      status_changed_at: transaction.status_changed_at,
-      can_reverse: transaction.posted?,
-      entries: transaction.ledger_entries.map { |e| 
-        { 
-          account: e.account.account_number,
-          direction: e.direction,
-          amount: e.amount 
-        } 
-      }
+  transaction = createTransaction({
+    external_ref: externalRef,
+    status: "pending",
+    description: "Payment for order ${orderId}",
+    metadata: {
+      payment_token: paymentToken,
+      order_id: orderId,
+      user_id: userId
     }
-  end
+  })
   
-  def reverse
-    transaction = LedgerTransaction.find(params[:id])
-    
-    unless transaction.posted?
-      return render json: { error: 'Can only reverse posted transactions' }, status: 422
-    end
-    
-    service = Ledger::TransactionLifecycleService.new(transaction)
-    result = service.reverse_transaction(reason: params[:reason])
-    
-    if result[:success]
-      render json: {
-        message: 'Transaction reversed successfully',
-        reversal_transaction_id: result[:reversal_transaction_id]
-      }
-    else
-      render json: { error: result[:error] }, status: 422
-    end
-  end
-end
+  // Get accounts
+  debitAccount = loadAccount(accountId)
+  creditAccount = findAccountByNumber("revenue_sales")
+  
+  // Create double entries
+  createLedgerEntry({
+    transaction_id: transaction.id,
+    account_id: debitAccount.id,
+    direction: "debit",
+    amount: amount,
+    currency: "USD"
+  })
+  
+  createLedgerEntry({
+    transaction_id: transaction.id,
+    account_id: creditAccount.id,
+    direction: "credit",
+    amount: amount,
+    currency: "USD"
+  })
+  
+  // Queue for processing
+  enqueueJob(PROCESS_TRANSACTION, transaction.id)
+  
+  return {
+    transaction_id: transaction.id,
+    status: transaction.status,
+    message: "Payment processing initiated"
+  }
 
-# Example 2: Querying transaction status
-class TransactionStatusService
-  def self.status_summary(user_id, start_date:, end_date:)
-    transactions = LedgerTransaction
-      .joins(ledger_entries: :account)
-      .where(accounts: { owner_id: user_id })
-      .where(created_at: start_date..end_date)
-      .distinct
-    
-    {
-      total: transactions.count,
-      by_status: transactions.group(:status).count,
-      pending: transactions.where(status: 'pending').count,
-      in_progress: transactions.where(status: %w[validated reserved]).count,
-      completed: transactions.where(status: 'posted').count,
-      failed: transactions.where(status: %w[rejected failed]).count,
-      pending_amount: transactions.where(status: 'reserved').sum('ledger_entries.amount')
-    }
-  end
+// Example 2: Get transaction status
+function getTransactionStatus(transactionId):
+  transaction = loadTransaction(transactionId)
+  entries = loadEntriesForTransaction(transactionId)
   
-  def self.find_stuck_transactions(older_than: 30.minutes)
-    LedgerTransaction
-      .where(status: %w[pending validated reserved])
-      .where('updated_at < ?', older_than.ago)
-      .includes(:ledger_entries)
-  end
-end
+  return {
+    id: transaction.id,
+    status: transaction.status,
+    status_changed_at: transaction.status_changed_at,
+    can_reverse: transaction.status == "posted",
+    entries: entries.map(e => ({
+      account: e.account.account_number,
+      direction: e.direction,
+      amount: e.amount
+    }))
+  }
 
-# Example 3: Webhook handler for async payment updates
-class StripeWebhooksController < ApplicationController
-  skip_before_action :verify_authenticity_token
+// Example 3: Reverse a transaction
+function reverseTransaction(transactionId, reason):
+  transaction = loadTransaction(transactionId)
   
-  def handle
-    event = Stripe::Webhook.construct_event(
-      request.body.read,
-      request.headers['Stripe-Signature'],
-      ENV['STRIPE_WEBHOOK_SECRET']
+  if transaction.status != "posted":
+    throw Error("Can only reverse posted transactions")
+  
+  service = new TransactionLifecycleService()
+  result = service.reverseTransaction(transaction, reason)
+  
+  if result.success:
+    return {
+      message: "Transaction reversed successfully",
+      reversal_transaction_id: result.reversal_transaction_id
+    }
+  else:
+    throw Error(result.error)
+
+// Example 4: Query status summary
+function getStatusSummary(userId, startDate, endDate):
+  transactions = findTransactions({
+    "entries.account.owner_id": userId,
+    created_at: [startDate, endDate]
+  })
+  
+  byStatus = groupBy(transactions, "status")
+  
+  return {
+    total: transactions.count,
+    by_status: byStatus,
+    pending: count(byStatus["pending"]),
+    in_progress: count(byStatus["validated"]) + count(byStatus["reserved"]),
+    completed: count(byStatus["posted"]),
+    failed: count(byStatus["rejected"]) + count(byStatus["failed"]),
+    reserved_amount: sum(
+      where(transactions, { status: "reserved" }),
+      "amount"
     )
-    
-    case event.type
-    when 'charge.succeeded'
-      handle_charge_succeeded(event.data.object)
-    when 'charge.failed'
-      handle_charge_failed(event.data.object)
-    when 'charge.refunded'
-      handle_charge_refunded(event.data.object)
-    end
-    
-    head :ok
-  rescue JSON::ParserError, Stripe::SignatureVerificationError => e
-    head :bad_request
-  end
+  }
+
+// Example 5: Webhook handler
+function handlePaymentWebhook(event):
+  // Verify webhook signature
+  if not verifyWebhookSignature(event):
+    return { status: "error", message: "Invalid signature" }
   
-  private
+  switch event.type:
+    case "charge.succeeded":
+      return handleChargeSucceeded(event.data)
+    case "charge.failed":
+      return handleChargeFailed(event.data)
+    case "charge.refunded":
+      return handleChargeRefunded(event.data)
+    default:
+      return { status: "ok" }
+
+function handleChargeSucceeded(charge):
+  transaction = findTransactionByExternalRef(charge.id)
+  if not transaction or transaction.status != "reserved":
+    return { status: "ok" }
   
-  def handle_charge_succeeded(charge)
-    # Find transaction by external_ref
-    transaction = LedgerTransaction.find_by(external_ref: charge.id)
-    return unless transaction
-    
-    # Only process if currently reserved
-    return unless transaction.reserved?
-    
-    # Complete the transaction
-    service = Ledger::TransactionLifecycleService.new(transaction)
-    service.post_to_ledger
-  end
+  postToLedger(transaction)
+  return { status: "ok" }
+
+function handleChargeFailed(charge):
+  transaction = findTransactionByExternalRef(charge.id)
+  if not transaction or isTerminalState(transaction.status):
+    return { status: "ok" }
   
-  def handle_charge_failed(charge)
-    transaction = LedgerTransaction.find_by(external_ref: charge.id)
-    return unless transaction
-    return if transaction.terminal_state?
-    
-    transaction.transition_to!('failed',
-      failure_reason: "Stripe: #{charge.failure_message}",
-      stripe_failure_code: charge.failure_code
-    )
-  end
+  transition(transaction, "failed", {
+    failure_reason: "Gateway: ${charge.failure_message}"
+  })
+  return { status: "ok" }
+
+function handleChargeRefunded(charge):
+  transaction = findTransactionByExternalRef(charge.id)
+  if not transaction or transaction.status != "posted":
+    return { status: "ok" }
   
-  def handle_charge_refunded(charge)
-    transaction = LedgerTransaction.find_by(external_ref: charge.id)
-    return unless transaction
-    return unless transaction.posted?
-    
-    # Reverse the transaction
-    service = Ledger::TransactionLifecycleService.new(transaction)
-    service.reverse_transaction(reason: 'Stripe refund initiated')
-  end
-end
+  service = new TransactionLifecycleService()
+  service.reverseTransaction(transaction, "Refund initiated")
+  return { status: "ok" }
 ```
 
-#### Step 5: Schedule Maintenance Jobs
+#### Step 5: Scheduled Maintenance
 
-```ruby
-# config/schedule.rb
-every 10.minutes do
-  rake 'ledger:sweep_stale_transactions'
-end
+```pseudocode
+// Scheduled Job: Run every 10 minutes
+function scheduleStaleTransactionSweep():
+  // Configuration
+  schedule = {
+    interval: "10 minutes",
+    task: sweepStaleTransactions,
+    max_runtime: "5 minutes"
+  }
 
-# lib/tasks/ledger.rake
-namespace :ledger do
-  desc 'Sweep stale transactions and release expired reservations'
-  task sweep_stale_transactions: :environment do
-    Ledger::StaleTransactionSweeperJob.perform_now(older_than: 1.hour)
-  end
+function sweepStaleTransactions():
+  staleTransactionSweeper(olderThan: 1.hour)
+
+// Report stuck transactions
+function reportStuckTransactions(olderThan: 30.minutes):
+  stuck = findTransactions({
+    status: ["pending", "validated", "reserved"],
+    updated_at: < now() - olderThan
+  })
   
-  desc 'Report on stuck transactions for manual review'
-  task report_stuck_transactions: :environment do
-    stuck = TransactionStatusService.find_stuck_transactions(older_than: 30.minutes)
+  if stuck.count > 0:
+    log("Found ${stuck.count} stuck transactions:")
+    for txn in stuck:
+      log("  - Transaction ${txn.id}: ${txn.status}")
     
-    if stuck.any?
-      puts "Found #{stuck.count} stuck transactions:"
-      stuck.each do |txn|
-        puts "  - Transaction #{txn.id}: #{txn.status} (updated #{time_ago_in_words(txn.updated_at)} ago)"
-      end
-      
-      # Send alert to team
-      SlackNotifier.notify("⚠️ #{stuck.count} transactions stuck for >30 minutes", channel: '#payments-alerts')
-    else
-      puts "No stuck transactions found"
-    end
-  end
-end
+    // Send alert
+    sendAlert("${stuck.count} transactions stuck >30 minutes", channel: "#payments-alerts")
+  else:
+    log("No stuck transactions found")
 ```
 
 ### Key Takeaways

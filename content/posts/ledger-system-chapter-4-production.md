@@ -55,255 +55,335 @@ erDiagram
 
 **1. Reconstruct Account History**
 
-```ruby
-class AuditQueryService
-  # Get complete history of an account
-  def self.account_history(account_id, from_date: nil, to_date: nil)
-    LedgerEntry
-      .joins(:transaction)
-      .where(account_id: account_id)
-      .where('ledger_transactions.posted_at BETWEEN ? AND ?', from_date, to_date)
-      .order('ledger_transactions.posted_at ASC, ledger_entries.created_at ASC')
-      .includes(:transaction)
-      .map do |entry|
-        {
-          date: entry.transaction.posted_at,
-          transaction_id: entry.transaction_id,
-          external_ref: entry.transaction.external_ref,
-          direction: entry.direction,
-          amount: entry.amount,
-          currency: entry.currency,
-          running_balance: calculate_running_balance(account_id, entry)
+```mermaid
+flowchart LR
+    A[Account ID] --> B[Query Ledger Entries]
+    B --> C[Join with Transactions]
+    C --> D[Filter by Date Range]
+    D --> E[Calculate Running Balance]
+    E --> F[Return History Records]
+    
+    style A fill:#6366f1
+    style F fill:#10b981
+```
+
+```pseudocode
+FUNCTION get_account_history(account_id, from_date, to_date):
+    // Query all entries for this account in date range
+    entries = QUERY ledger_entries
+        JOIN ledger_transactions ON ledger_entries.transaction_id = ledger_transactions.id
+        WHERE account_id = account_id
+        AND ledger_transactions.posted_at BETWEEN from_date AND to_date
+        ORDER BY ledger_transactions.posted_at ASC, ledger_entries.created_at ASC
+    
+    history = []
+    running_balance = 0
+    
+    FOR EACH entry IN entries:
+        IF entry.direction == 'credit':
+            running_balance = running_balance + entry.amount
+        ELSE:
+            running_balance = running_balance - entry.amount
+        
+        APPEND history WITH {
+            date: entry.transaction.posted_at,
+            transaction_id: entry.transaction_id,
+            external_ref: entry.transaction.external_ref,
+            direction: entry.direction,
+            amount: entry.amount,
+            currency: entry.currency,
+            running_balance: running_balance
         }
-      end
-  end
-  
-  # Calculate running balance at any point
-  def self.balance_at(account_id, timestamp)
-    LedgerEntry
-      .joins(:transaction)
-      .where(account_id: account_id)
-      .where('ledger_transactions.posted_at <= ?', timestamp)
-      .sum("CASE WHEN direction = 'credit' THEN amount ELSE -amount END")
-  end
-  
-  # Find all transactions affecting an account in a time range
-  def self.transactions_for_account(account_id, start_time:, end_time:)
-    LedgerTransaction
-      .joins(:entries)
-      .where(ledger_entries: { account_id: account_id })
-      .where(posted_at: start_time..end_time)
-      .distinct
-      .order(posted_at: :desc)
-  end
-end
+    
+    RETURN history
+END FUNCTION
+
+FUNCTION get_balance_at_time(account_id, timestamp):
+    total = QUERY SUM(
+        CASE 
+            WHEN direction = 'credit' THEN amount 
+            ELSE -amount 
+        END
+    ) FROM ledger_entries
+        JOIN ledger_transactions ON ledger_entries.transaction_id = ledger_transactions.id
+        WHERE account_id = account_id
+        AND ledger_transactions.posted_at <= timestamp
+    
+    RETURN total
+END FUNCTION
+
+FUNCTION get_transactions_for_account(account_id, start_time, end_time):
+    RETURN QUERY ledger_transactions
+        JOIN ledger_entries ON ledger_transactions.id = ledger_entries.transaction_id
+        WHERE ledger_entries.account_id = account_id
+        AND ledger_transactions.posted_at BETWEEN start_time AND end_time
+        DISTINCT
+        ORDER BY posted_at DESC
+END FUNCTION
 ```
 
 **2. Trace Money Flow**
 
-```ruby
-class MoneyFlowTracer
-  # Given a transaction, trace where the money came from and went
-  def self.trace_transaction(transaction_id)
-    txn = LedgerTransaction.find(transaction_id)
+```mermaid
+flowchart TD
+    Start[Transaction ID] --> Load[Load Transaction]
+    Load --> Split{Split by Direction}
+    Split --> Debits[Collect Debits]
+    Split --> Credits[Collect Credits]
+    Debits --> TraceSource[Trace Source]
+    Credits --> TraceDest[Trace Destination]
+    TraceSource --> Return[Return Flow Report]
+    TraceDest --> Return
     
-    {
-      transaction: txn,
-      debits: txn.entries.select { |e| e.direction == 'debit' },
-      credits: txn.entries.select { |e| e.direction == 'credit' },
-      source: trace_source(txn),
-      destination: trace_destination(txn)
+    style Start fill:#6366f1
+    style Return fill:#10b981
+```
+
+```pseudocode
+FUNCTION trace_transaction(transaction_id):
+    txn = GET ledger_transactions WHERE id = transaction_id
+    
+    debits = FILTER txn.entries WHERE direction = 'debit'
+    credits = FILTER txn.entries WHERE direction = 'credit'
+    
+    RETURN {
+        transaction: txn,
+        debits: debits,
+        credits: credits,
+        source_accounts: EXTRACT unique account_id FROM debits,
+        destination_accounts: EXTRACT unique account_id FROM credits
     }
-  end
-  
-  # Find all transactions that contributed to a specific balance
-  def self.trace_balance_composition(account_id, timestamp)
-    entries = LedgerEntry
-      .joins(:transaction)
-      .where(account_id: account_id)
-      .where('ledger_transactions.posted_at <= ?', timestamp)
-      .order('ledger_transactions.posted_at DESC')
+END FUNCTION
+
+FUNCTION trace_balance_composition(account_id, timestamp):
+    entries = QUERY ledger_entries
+        JOIN ledger_transactions ON ledger_entries.transaction_id = ledger_transactions.id
+        WHERE account_id = account_id
+        AND ledger_transactions.posted_at <= timestamp
+        ORDER BY ledger_transactions.posted_at DESC
     
     balance = 0
     composition = []
     
-    entries.each do |entry|
-      change = entry.direction == 'credit' ? entry.amount : -entry.amount
-      balance += change
-      
-      composition << {
-        transaction_id: entry.transaction_id,
-        source: entry.transaction.external_ref,
-        amount: change,
-        running_total: balance,
-        timestamp: entry.transaction.posted_at
-      }
-    end
+    FOR EACH entry IN entries:
+        IF entry.direction == 'credit':
+            change = entry.amount
+        ELSE:
+            change = -entry.amount
+        
+        balance = balance + change
+        
+        PREPEND composition WITH {
+            transaction_id: entry.transaction_id,
+            source: entry.transaction.external_ref,
+            amount: change,
+            running_total: balance,
+            timestamp: entry.transaction.posted_at
+        }
     
-    composition.reverse # Chronological order
-  end
-end
+    RETURN composition
+END FUNCTION
 ```
 
 **3. Detect Anomalies**
 
-```ruby
-class AnomalyDetector
-  # Find transactions that don't balance
-  def self.find_unbalanced_transactions(start_time:, end_time:)
-    LedgerTransaction
-      .where(posted_at: start_time..end_time)
-      .select('ledger_transactions.*, SUM(CASE WHEN ledger_entries.direction = \'debit\' THEN ledger_entries.amount ELSE -ledger_entries.amount END) as balance')
-      .joins(:entries)
-      .group('ledger_transactions.id')
-      .having('SUM(CASE WHEN ledger_entries.direction = \'debit\' THEN ledger_entries.amount ELSE -ledger_entries.amount END) != 0')
-  end
-  
-  # Find accounts with negative balances (if not allowed)
-  def self.find_negative_balances
-    Account
-      .where('balance < 0')
-      .where.not(account_type: 'liability') # Liabilities can be negative
-  end
-  
-  # Find duplicate external_refs (should never happen)
-  def self.find_duplicate_refs
-    LedgerTransaction
-      .group(:external_ref)
-      .having('COUNT(*) > 1')
-      .where.not(external_ref: nil)
-  end
-  
-  # Detect suspicious patterns (e.g., round numbers, velocity checks)
-  def self.suspicious_activity_report(account_id:, time_window: 24.hours)
-    transactions = LedgerTransaction
-      .joins(:entries)
-      .where(ledger_entries: { account_id: account_id })
-      .where('posted_at > ?', time_window.ago)
+```mermaid
+flowchart TD
+    Start[Start Anomaly Detection] --> Check1[Check Unbalanced Transactions]
+    Check1 --> Check2[Check Negative Balances]
+    Check2 --> Check3[Check Duplicate References]
+    Check3 --> Check4[Check Suspicious Patterns]
+    Check4 --> Report[Generate Report]
     
-    {
-      total_volume: transactions.sum('ledger_entries.amount'),
-      transaction_count: transactions.count,
-      round_number_txns: transactions.where('ledger_entries.amount % 100 = 0').count,
-      velocity_flag: transactions.count > 10 # Configurable threshold
+    style Start fill:#6366f1
+    style Report fill:#f59e0b
+```
+
+```pseudocode
+FUNCTION find_unbalanced_transactions(start_time, end_time):
+    RETURN QUERY ledger_transactions
+        JOIN ledger_entries ON ledger_transactions.id = ledger_entries.transaction_id
+        WHERE posted_at BETWEEN start_time AND end_time
+        GROUP BY ledger_transactions.id
+        HAVING SUM(
+            CASE 
+                WHEN ledger_entries.direction = 'debit' THEN ledger_entries.amount
+                ELSE -ledger_entries.amount
+            END
+        ) != 0
+END FUNCTION
+
+FUNCTION find_negative_balances():
+    RETURN QUERY accounts
+        WHERE balance < 0
+        AND account_type != 'liability'
+END FUNCTION
+
+FUNCTION find_duplicate_external_refs():
+    RETURN QUERY ledger_transactions
+        WHERE external_ref IS NOT NULL
+        GROUP BY external_ref
+        HAVING COUNT(*) > 1
+END FUNCTION
+
+FUNCTION generate_suspicious_activity_report(account_id, time_window_hours):
+    cutoff_time = NOW() - time_window_hours hours
+    
+    transactions = QUERY ledger_transactions
+        JOIN ledger_entries ON ledger_transactions.id = ledger_entries.transaction_id
+        WHERE ledger_entries.account_id = account_id
+        AND posted_at > cutoff_time
+    
+    total_volume = SUM ledger_entries.amount FROM transactions
+    transaction_count = COUNT transactions
+    round_number_count = COUNT transactions WHERE amount % 100 = 0
+    
+    RETURN {
+        total_volume: total_volume,
+        transaction_count: transaction_count,
+        round_number_transactions: round_number_count,
+        velocity_flag: transaction_count > 10
     }
-  end
-end
+END FUNCTION
 ```
 
 **4. Event Replay for Projections**
 
-```ruby
-class ProjectionRebuilder
-  # Rebuild a projection from events (useful for fixing bugs)
-  def self.rebuild_account_balances
-    # Clear existing projections
-    AccountBalance.delete_all
+```mermaid
+flowchart TD
+    Start[Start Rebuild] --> Clear[Clear Projections Table]
+    Clear --> Query[Query All Posted Entries]
+    Query --> Loop{Process Each Entry}
+    Loop --> Update[Update Account Balance]
+    Update --> Save[Save Snapshot]
+    Save --> Loop
+    Loop --> Verify[Verify All Balances]
+    Verify --> Done[Done]
     
-    # Replay all events in order
-    LedgerEntry
-      .joins(:transaction)
-      .where(ledger_transactions: { status: 'posted' })
-      .order('ledger_transactions.posted_at ASC, ledger_entries.created_at ASC')
-      .find_each do |entry|
-        account_balance = AccountBalance.find_or_initialize_by(account_id: entry.account_id)
+    style Start fill:#6366f1
+    style Done fill:#10b981
+```
+
+```pseudocode
+FUNCTION rebuild_account_balances():
+    // Clear existing projections
+    DELETE ALL FROM account_balances
+    
+    // Query all posted entries in chronological order
+    entries = QUERY ledger_entries
+        JOIN ledger_transactions ON ledger_entries.transaction_id = ledger_transactions.id
+        WHERE ledger_transactions.status = 'posted'
+        ORDER BY ledger_transactions.posted_at ASC, ledger_entries.created_at ASC
+    
+    // Replay all events
+    FOR EACH entry IN entries:
+        account_balance = GET account_balances WHERE account_id = entry.account_id
         
-        change = entry.direction == 'credit' ? entry.amount : -entry.amount
-        account_balance.balance = (account_balance.balance || 0) + change
+        IF account_balance IS NULL:
+            account_balance = CREATE account_balances {
+                account_id: entry.account_id,
+                balance: 0,
+                last_entry_id: NULL
+            }
+        
+        IF entry.direction == 'credit':
+            change = entry.amount
+        ELSE:
+            change = -entry.amount
+        
+        account_balance.balance = account_balance.balance + change
         account_balance.last_entry_id = entry.id
         account_balance.updated_at = entry.transaction.posted_at
-        account_balance.save!
-      end
-  end
-  
-  # Verify projections match source of truth
-  def self.verify_balances
+        
+        SAVE account_balance
+    
+    RETURN COUNT entries
+END FUNCTION
+
+FUNCTION verify_balance_projections():
     discrepancies = []
     
-    Account.find_each do |account|
-      computed = LedgerEntry
-        .joins(:transaction)
-        .where(account_id: account.id, ledger_transactions: { status: 'posted' })
-        .sum("CASE WHEN direction = 'credit' THEN amount ELSE -amount END")
-      
-      projected = AccountBalance.find_by(account_id: account.id)&.balance || 0
-      
-      if computed != projected
-        discrepancies << {
-          account_id: account.id,
-          computed: computed,
-          projected: projected,
-          diff: computed - projected
-        }
-      end
-    end
+    FOR EACH account IN accounts:
+        // Calculate from source of truth
+        computed = QUERY SUM(
+            CASE 
+                WHEN direction = 'credit' THEN amount 
+                ELSE -amount 
+            END
+        ) FROM ledger_entries
+            JOIN ledger_transactions ON ledger_entries.transaction_id = ledger_transactions.id
+            WHERE account_id = account.id
+            AND ledger_transactions.status = 'posted'
+        
+        // Get projected value
+        projection = GET account_balances WHERE account_id = account.id
+        projected = IF projection THEN projection.balance ELSE 0
+        
+        IF computed != projected:
+            APPEND discrepancies WITH {
+                account_id: account.id,
+                computed: computed,
+                projected: projected,
+                difference: computed - projected
+            }
     
-    discrepancies
-  end
-end
+    RETURN discrepancies
+END FUNCTION
 ```
 
 ### Audit Trail Best Practices
 
 **Always include context:**
 
-```ruby
-class LedgerTransaction < ApplicationRecord
-  # Store audit context
-  before_create :capture_audit_context
-  
-  private
-  
-  def capture_audit_context
-    self.ip_address = Thread.current[:audit_ip]
-    self.user_agent = Thread.current[:audit_user_agent]
-    self.correlation_id = Thread.current[:correlation_id]
-  end
-end
+```mseudocode
+FUNCTION capture_audit_context(transaction):
+    transaction.ip_address = GET current request IP address
+    transaction.user_agent = GET current request user agent
+    transaction.correlation_id = GET request header 'X-Request-ID' OR generate UUID
+    
+    RETURN transaction
+END FUNCTION
 
-# In your controller/middleware
-Thread.current[:audit_ip] = request.remote_ip
-Thread.current[:correlation_id] = request.headers['X-Request-ID'] || SecureRandom.uuid
+// In request middleware/interceptor
+SET thread context audit_ip = request.remote_ip
+SET thread context correlation_id = request.headers['X-Request-ID'] OR generate UUID
 ```
 
 **Use read replicas for heavy queries:**
 
-```ruby
-class AuditQueryService
-  # Route heavy queries to read replica
-  def self.expensive_report
-    ActiveRecord::Base.connected_to(role: :reading) do
-      # Complex aggregation queries here
-    end
-  end
-end
+```pseudocode
+FUNCTION execute_on_read_replica(query_function):
+    SWITCH database connection TO read_replica
+    result = EXECUTE query_function()
+    SWITCH database connection BACK TO primary
+    RETURN result
+END FUNCTION
 ```
 
 **Index strategically:**
 
-```ruby
-class CreateLedgerEntries < ActiveRecord::Migration[7.0]
-  def change
-    create_table :ledger_entries do |t|
-      t.references :transaction, null: false, foreign_key: true
-      t.references :account, null: false, foreign_key: true
-      t.string :direction, null: false
-      t.decimal :amount, precision: 19, scale: 4, null: false
-      t.string :currency, null: false
-      t.timestamps
-    end
-    
-    # Critical indexes for audit queries
-    add_index :ledger_entries, [:account_id, :created_at], 
-              name: 'idx_entries_account_time'
-    add_index :ledger_entries, [:transaction_id, :account_id], 
-              name: 'idx_entries_txn_account'
-    
-    # For balance calculations
-    add_index :ledger_transactions, [:status, :posted_at], 
-              name: 'idx_txn_status_time'
-  end
-end
+```sql
+-- Table: ledger_entries
+CREATE TABLE ledger_entries (
+    id UUID PRIMARY KEY,
+    transaction_id UUID NOT NULL REFERENCES ledger_transactions(id),
+    account_id UUID NOT NULL REFERENCES accounts(id),
+    direction VARCHAR(10) NOT NULL, -- 'debit' or 'credit'
+    amount DECIMAL(19,4) NOT NULL,
+    currency VARCHAR(3) NOT NULL,
+    created_at TIMESTAMP NOT NULL
+);
+
+-- Critical indexes for audit queries
+CREATE INDEX idx_entries_account_time 
+    ON ledger_entries(account_id, created_at);
+
+CREATE INDEX idx_entries_txn_account 
+    ON ledger_entries(transaction_id, account_id);
+
+-- For balance calculations
+CREATE INDEX idx_txn_status_time 
+    ON ledger_transactions(status, posted_at);
 ```
 
 ## Improvements: Balance Snapshots
@@ -333,202 +413,258 @@ flowchart TD
 - **Debugging**: Quickly identify when balances diverged
 - **Reconciliation**: Validate calculations haven't drifted
 
-### Rails Implementation
+### Implementation
 
-#### Step 1: Migration
+#### Step 1: Database Schema
 
-```ruby
-# db/migrate/xxx_create_balance_snapshots.rb
-class CreateBalanceSnapshots < ActiveRecord::Migration[7.0]
-  def change
-    create_table :balance_snapshots do |t|
-      t.references :account, null: false, foreign_key: true
-      t.decimal :balance, precision: 19, scale: 4, null: false
-      t.decimal :available_balance, precision: 19, scale: 4, null: false
-      t.string :snapshot_type, null: false # 'hourly', 'daily', 'end_of_day'
-      t.datetime :captured_at, null: false
-      t.bigint :last_entry_id # Last entry included in this snapshot
-      t.bigint :transaction_count # Number of transactions since last snapshot
-      t.decimal :net_change, precision: 19, scale: 4 # Change from previous snapshot
-      t.timestamps
-      
-      # Critical indexes for fast lookups
-      t.index [:account_id, :captured_at], 
-              name: 'idx_snapshots_account_time'
-      t.index [:snapshot_type, :captured_at],
-              name: 'idx_snapshots_type_time'
-      t.index :captured_at, 
-              name: 'idx_snapshots_time'
-    end
+```mermaid
+erDiagram
+    BALANCE_SNAPSHOTS {
+        uuid id PK
+        uuid account_id FK
+        decimal balance
+        decimal available_balance
+        string snapshot_type
+        datetime captured_at
+        bigint last_entry_id
+        int transaction_count
+        decimal net_change
+        datetime created_at
+    }
     
-    # Add foreign key tracking to accounts
-    add_column :accounts, :last_snapshot_at, :datetime
-    add_column :accounts, :last_snapshot_id, :bigint
-    add_index :accounts, :last_snapshot_at
-  end
-end
+    ACCOUNTS {
+        uuid id PK
+        string account_number
+        datetime last_snapshot_at
+        bigint last_snapshot_id
+    }
+    
+    BALANCE_SNAPSHOTS ||--|| ACCOUNTS : "belongs to"
 ```
 
-#### Step 2: Model
+```sql
+-- Table: balance_snapshots
+CREATE TABLE balance_snapshots (
+    id UUID PRIMARY KEY,
+    account_id UUID NOT NULL REFERENCES accounts(id),
+    balance DECIMAL(19,4) NOT NULL,
+    available_balance DECIMAL(19,4) NOT NULL,
+    snapshot_type VARCHAR(20) NOT NULL, -- 'hourly', 'daily', 'end_of_day', 'manual'
+    captured_at TIMESTAMP NOT NULL,
+    last_entry_id BIGINT,
+    transaction_count INTEGER,
+    net_change DECIMAL(19,4),
+    created_at TIMESTAMP NOT NULL
+);
 
-```ruby
-# app/models/balance_snapshot.rb
-class BalanceSnapshot < ApplicationRecord
-  belongs_to :account
-  
-  validates :balance, numericality: true
-  validates :available_balance, numericality: true
-  validates :captured_at, presence: true
-  validates :snapshot_type, inclusion: { in: %w[hourly daily end_of_day manual] }
-  
-  # Scopes for common queries
-  scope :for_account, ->(account_id) { where(account_id: account_id) }
-  scope :daily, -> { where(snapshot_type: 'daily') }
-  scope :end_of_day, -> { where(snapshot_type: 'end_of_day') }
-  scope :before, ->(time) { where('captured_at <= ?', time) }
-  scope :after, ->(time) { where('captured_at >= ?', time) }
-  
-  # Get the most recent snapshot for an account
-  def self.latest_for(account_id)
-    for_account(account_id).order(captured_at: :desc).first
-  end
-  
-  # Get snapshot at or before a specific time
-  def self.at_time(account_id, time)
-    for_account(account_id)
-      .before(time)
-      .order(captured_at: :desc)
-      .first
-  end
-  
-  # Verify this snapshot matches calculated balance
-  def verify!
-    calculated = calculate_current_balance
-    
-    if calculated != balance
-      raise SnapshotVerificationError,
-        "Snapshot verification failed for account #{account_id} at #{captured_at}. " \
-        "Snapshot: #{balance}, Calculated: #{calculated}, Diff: #{calculated - balance}"
-    end
-    
-    true
-  end
-  
-  private
-  
-  def calculate_current_balance
-    LedgerEntry
-      .joins(:ledger_transaction)
-      .where(account_id: account_id)
-      .where('ledger_transactions.posted_at <= ?', captured_at)
-      .sum("CASE WHEN direction = 'credit' THEN amount ELSE -amount END")
-  end
-end
+-- Critical indexes for fast lookups
+CREATE INDEX idx_snapshots_account_time 
+    ON balance_snapshots(account_id, captured_at);
 
-class SnapshotVerificationError < StandardError; end
+CREATE INDEX idx_snapshots_type_time 
+    ON balance_snapshots(snapshot_type, captured_at);
+
+CREATE INDEX idx_snapshots_time 
+    ON balance_snapshots(captured_at);
+
+-- Add tracking columns to accounts
+ALTER TABLE accounts 
+    ADD COLUMN last_snapshot_at TIMESTAMP,
+    ADD COLUMN last_snapshot_id BIGINT;
+
+CREATE INDEX idx_accounts_last_snapshot 
+    ON accounts(last_snapshot_at);
+```
+
+#### Step 2: Snapshot Model
+
+```mermaid
+flowchart TD
+    Create[Create Snapshot] --> Validate[Validate Data]
+    Validate --> Save[Save to Database]
+    Save --> Update[Update Account Reference]
+    Save --> Verify{Verification?}
+    Verify -->|Yes| Calc[Calculate Expected Balance]
+    Calc --> Compare[Compare to Stored]
+    Compare --> Match{Match?}
+    Match -->|No| Error[Throw Verification Error]
+    Match -->|Yes| Success[Success]
+    Verify -->|No| Success
+    
+    style Create fill:#6366f1
+    style Success fill:#10b981
+    style Error fill:#ef4444
+```
+
+```pseudocode
+STRUCT BalanceSnapshot:
+    id: UUID
+    account_id: UUID
+    balance: DECIMAL
+    available_balance: DECIMAL
+    snapshot_type: STRING -- 'hourly', 'daily', 'end_of_day', 'manual'
+    captured_at: TIMESTAMP
+    last_entry_id: BIGINT
+    transaction_count: INT
+    net_change: DECIMAL
+    created_at: TIMESTAMP
+
+FUNCTION validate_snapshot(snapshot):
+    IF snapshot.balance IS NULL:
+        RAISE error "Balance is required"
+    
+    IF snapshot.available_balance IS NULL:
+        RAISE error "Available balance is required"
+    
+    IF snapshot.captured_at IS NULL:
+        RAISE error "Capture time is required"
+    
+    IF snapshot.snapshot_type NOT IN ('hourly', 'daily', 'end_of_day', 'manual'):
+        RAISE error "Invalid snapshot type"
+    
+    RETURN true
+END FUNCTION
+
+FUNCTION get_latest_snapshot(account_id):
+    RETURN QUERY balance_snapshots
+        WHERE account_id = account_id
+        ORDER BY captured_at DESC
+        LIMIT 1
+END FUNCTION
+
+FUNCTION get_snapshot_at_time(account_id, time):
+    RETURN QUERY balance_snapshots
+        WHERE account_id = account_id
+        AND captured_at <= time
+        ORDER BY captured_at DESC
+        LIMIT 1
+END FUNCTION
+
+FUNCTION verify_snapshot(snapshot):
+    // Calculate expected balance from ledger entries
+    calculated = QUERY SUM(
+        CASE 
+            WHEN direction = 'credit' THEN amount 
+            ELSE -amount 
+        END
+    ) FROM ledger_entries
+        JOIN ledger_transactions ON ledger_entries.transaction_id = ledger_transactions.id
+        WHERE account_id = snapshot.account_id
+        AND ledger_transactions.posted_at <= snapshot.captured_at
+    
+    IF calculated != snapshot.balance:
+        RAISE error "Verification failed for account " + snapshot.account_id + 
+                    " at " + snapshot.captured_at + 
+                    ". Expected: " + calculated + 
+                    ", Stored: " + snapshot.balance
+    
+    RETURN true
+END FUNCTION
 ```
 
 #### Step 3: Snapshot Service
 
-```ruby
-# app/services/ledger/balance_snapshot_service.rb
-module Ledger
-  class BalanceSnapshotService
-    BATCH_SIZE = 1000 # Process accounts in batches
+```mermaid
+flowchart TD
+    Start[Create Daily Snapshots] --> Batch[Process in Batches]
+    Batch --> CheckExists{Already Snapshotted?}
+    CheckExists -->|Yes| Skip[Skip Account]
+    CheckExists -->|No| CheckActivity{Has Activity?}
+    CheckActivity -->|No| Skip
+    CheckActivity -->|Yes| Create[Create Snapshot]
+    Create --> Update[Update Account Record]
+    Update --> Next{More Accounts?}
+    Next -->|Yes| Batch
+    Next -->|No| Done[Complete]
     
-    # Create daily snapshots for all accounts
-    def self.create_daily_snapshots(date: Date.yesterday)
-      Rails.logger.info "Creating daily balance snapshots for #{date}"
-      
-      end_of_day = date.end_of_day
-      snapshot_count = 0
-      
-      # Find all accounts with activity since last snapshot
-      Account.find_each(batch_size: BATCH_SIZE) do |account|
-        # Skip if already snapshotted for this date
-        next if already_snapshotted?(account, date, 'daily')
+    style Start fill:#6366f1
+    style Done fill:#10b981
+```
+
+```pseudocode
+CONST BATCH_SIZE = 1000
+
+FUNCTION create_daily_snapshots(date):
+    LOG "Creating daily balance snapshots for " + date
+    
+    end_of_day = GET end of day for date
+    snapshot_count = 0
+    
+    // Process accounts in batches
+    accounts = GET ALL accounts
+    
+    FOR EACH account IN accounts:
+        // Skip if already snapshotted for this date
+        IF already_snapshotted(account, date, 'daily'):
+            CONTINUE
         
-        # Skip if no activity
-        next unless account_activity_since?(account, account.last_snapshot_at)
+        // Skip if no activity since last snapshot
+        IF NOT has_activity_since(account, account.last_snapshot_at):
+            CONTINUE
         
-        create_snapshot_for_account(account, end_of_day, 'daily')
-        snapshot_count += 1
-      end
-      
-      Rails.logger.info "Created #{snapshot_count} daily snapshots"
-      snapshot_count
-    end
+        CREATE snapshot FOR account AT end_of_day WITH TYPE 'daily'
+        snapshot_count = snapshot_count + 1
     
-    # Create end-of-day snapshots (for regulatory compliance)
-    def self.create_end_of_day_snapshots(date: Date.yesterday)
-      Rails.logger.info "Creating end-of-day balance snapshots for #{date}"
-      
-      # Use market close time or midnight UTC
-      end_of_day = date.to_time.end_of_day.utc
-      
-      Account.find_each(batch_size: BATCH_SIZE) do |account|
-        create_snapshot_for_account(account, end_of_day, 'end_of_day')
-      end
-    end
+    LOG "Created " + snapshot_count + " daily snapshots"
+    RETURN snapshot_count
+END FUNCTION
+
+FUNCTION create_snapshot_for_account(account, timestamp, snapshot_type):
+    // Get last entry ID before this timestamp
+    last_entry = QUERY ledger_entries
+        JOIN ledger_transactions ON ledger_entries.transaction_id = ledger_transactions.id
+        WHERE account_id = account.id
+        AND ledger_transactions.posted_at <= timestamp
+        ORDER BY ledger_transactions.posted_at DESC, ledger_entries.created_at DESC
+        LIMIT 1
     
-    # Create snapshot for a specific account at a specific time
-    def self.create_snapshot_for_account(account, timestamp, snapshot_type)
-      # Get last entry ID before this timestamp
-      last_entry = LedgerEntry
-        .joins(:ledger_transaction)
-        .where(account_id: account.id)
-        .where('ledger_transactions.posted_at <= ?', timestamp)
-        .order('ledger_transactions.posted_at DESC, ledger_entries.created_at DESC')
-        .first
-      
-      last_entry_id = last_entry&.id
-      
-      # Calculate balance at this point
-      balance = LedgerEntry
-        .joins(:ledger_transaction)
-        .where(account_id: account.id)
-        .where('ledger_transactions.posted_at <= ?', timestamp)
-        .sum("CASE WHEN direction = 'credit' THEN amount ELSE -amount END")
-      
-      # Calculate available balance
-      reservations = Reservation
-        .where(account_id: account.id)
-        .where('created_at <= ?', timestamp)
-        .where('expires_at > ?', timestamp)
-        .sum(:amount)
-      
-      available_balance = balance - reservations
-      
-      # Calculate change from previous snapshot
-      previous_snapshot = BalanceSnapshot
-        .for_account(account.id)
-        .before(timestamp)
-        .order(captured_at: :desc)
-        .first
-      
-      net_change = previous_snapshot ? balance - previous_snapshot.balance : balance
-      
-      # Count transactions since last snapshot
-      transaction_count = if previous_snapshot
-        LedgerTransaction
-          .joins(:ledger_entries)
-          .where(ledger_entries: { account_id: account.id })
-          .where('ledger_transactions.posted_at > ?', previous_snapshot.captured_at)
-          .where('ledger_transactions.posted_at <= ?', timestamp)
-          .distinct
-          .count
-      else
-        LedgerTransaction
-          .joins(:ledger_entries)
-          .where(ledger_entries: { account_id: account.id })
-          .where('ledger_transactions.posted_at <= ?', timestamp)
-          .distinct
-          .count
-      end
-      
-      # Create snapshot
-      snapshot = BalanceSnapshot.create!(
-        account: account,
+    last_entry_id = IF last_entry THEN last_entry.id ELSE NULL
+    
+    // Calculate balance at this point
+    balance = QUERY SUM(
+        CASE 
+            WHEN direction = 'credit' THEN amount 
+            ELSE -amount 
+        END
+    ) FROM ledger_entries
+        JOIN ledger_transactions ON ledger_entries.transaction_id = ledger_transactions.id
+        WHERE account_id = account.id
+        AND ledger_transactions.posted_at <= timestamp
+    
+    // Calculate available balance
+    reservations = QUERY SUM(amount) FROM reservations
+        WHERE account_id = account.id
+        AND created_at <= timestamp
+        AND expires_at > timestamp
+    
+    available_balance = balance - reservations
+    
+    // Calculate change from previous snapshot
+    previous_snapshot = get_latest_snapshot_before(account.id, timestamp)
+    
+    IF previous_snapshot:
+        net_change = balance - previous_snapshot.balance
+    ELSE:
+        net_change = balance
+    
+    // Count transactions since last snapshot
+    IF previous_snapshot:
+        transaction_count = QUERY COUNT DISTINCT ledger_transactions.id
+            FROM ledger_transactions
+            JOIN ledger_entries ON ledger_transactions.id = ledger_entries.transaction_id
+            WHERE ledger_entries.account_id = account.id
+            AND ledger_transactions.posted_at > previous_snapshot.captured_at
+            AND ledger_transactions.posted_at <= timestamp
+    ELSE:
+        transaction_count = QUERY COUNT DISTINCT ledger_transactions.id
+            FROM ledger_transactions
+            JOIN ledger_entries ON ledger_transactions.id = ledger_entries.transaction_id
+            WHERE ledger_entries.account_id = account.id
+            AND ledger_transactions.posted_at <= timestamp
+    
+    // Create snapshot
+    snapshot = CREATE balance_snapshots {
+        account_id: account.id,
         balance: balance,
         available_balance: available_balance,
         snapshot_type: snapshot_type,
@@ -536,319 +672,312 @@ module Ledger
         last_entry_id: last_entry_id,
         transaction_count: transaction_count,
         net_change: net_change
-      )
-      
-      # Update account's last snapshot reference
-      account.update!(
-        last_snapshot_at: timestamp,
-        last_snapshot_id: snapshot.id
-      )
-      
-      snapshot
-    end
+    }
     
-    # Get balance at a specific point in time (uses snapshots for performance)
-    def self.balance_at_time(account_id, timestamp)
-      # Find the most recent snapshot before this time
-      snapshot = BalanceSnapshot
-        .for_account(account_id)
-        .before(timestamp)
-        .order(captured_at: :desc)
-        .first
-      
-      if snapshot
-        # Apply entries since snapshot
-        entries_since_snapshot = LedgerEntry
-          .joins(:ledger_transaction)
-          .where(account_id: account_id)
-          .where('ledger_transactions.posted_at > ?', snapshot.captured_at)
-          .where('ledger_transactions.posted_at <= ?', timestamp)
-        
-        change_since_snapshot = entries_since_snapshot
-          .sum("CASE WHEN direction = 'credit' THEN amount ELSE -amount END")
-        
-        snapshot.balance + change_since_snapshot
-      else
-        # No snapshot exists, calculate from scratch (slow path)
-        LedgerEntry
-          .joins(:ledger_transaction)
-          .where(account_id: account_id)
-          .where('ledger_transactions.posted_at <= ?', timestamp)
-          .sum("CASE WHEN direction = 'credit' THEN amount ELSE -amount END")
-      end
-    end
+    // Update account's last snapshot reference
+    UPDATE accounts SET
+        last_snapshot_at = timestamp,
+        last_snapshot_id = snapshot.id
+    WHERE id = account.id
     
-    # Verify all snapshots are correct (detect drift)
-    def self.verify_snapshots(date: Date.yesterday)
-      Rails.logger.info "Verifying balance snapshots for #{date}"
-      
-      discrepancies = []
-      
-      BalanceSnapshot
-        .where(snapshot_type: 'end_of_day')
-        .where('captured_at >= ?', date.beginning_of_day)
-        .where('captured_at <= ?', date.end_of_day)
-        .find_each do |snapshot|
-          begin
-            snapshot.verify!
-          rescue SnapshotVerificationError => e
-            discrepancies << {
-              snapshot_id: snapshot.id,
-              account_id: snapshot.account_id,
-              error: e.message
+    RETURN snapshot
+END FUNCTION
+
+FUNCTION get_balance_at_time(account_id, timestamp):
+    // Find the most recent snapshot before this time
+    snapshot = QUERY balance_snapshots
+        WHERE account_id = account_id
+        AND captured_at <= timestamp
+        ORDER BY captured_at DESC
+        LIMIT 1
+    
+    IF snapshot:
+        // Apply entries since snapshot
+        change_since_snapshot = QUERY SUM(
+            CASE 
+                WHEN direction = 'credit' THEN amount 
+                ELSE -amount 
+            END
+        ) FROM ledger_entries
+            JOIN ledger_transactions ON ledger_entries.transaction_id = ledger_transactions.id
+            WHERE account_id = account_id
+            AND ledger_transactions.posted_at > snapshot.captured_at
+            AND ledger_transactions.posted_at <= timestamp
+        
+        RETURN snapshot.balance + change_since_snapshot
+    ELSE:
+        // No snapshot exists, calculate from scratch (slow path)
+        RETURN QUERY SUM(
+            CASE 
+                WHEN direction = 'credit' THEN amount 
+                ELSE -amount 
+            END
+        ) FROM ledger_entries
+            JOIN ledger_transactions ON ledger_entries.transaction_id = ledger_transactions.id
+            WHERE account_id = account_id
+            AND ledger_transactions.posted_at <= timestamp
+END FUNCTION
+
+FUNCTION verify_snapshots(date):
+    LOG "Verifying balance snapshots for " + date
+    
+    discrepancies = []
+    
+    snapshots = QUERY balance_snapshots
+        WHERE snapshot_type = 'end_of_day'
+        AND captured_at >= start of date
+        AND captured_at <= end of date
+    
+    FOR EACH snapshot IN snapshots:
+        TRY:
+            verify_snapshot(snapshot)
+        CATCH verification_error:
+            APPEND discrepancies WITH {
+                snapshot_id: snapshot.id,
+                account_id: snapshot.account_id,
+                error: verification_error.message
             }
-            Rails.logger.error e.message
-          end
-        end
-      
-      if discrepancies.any?
-        AlertService.notify_balance_drift(discrepancies)
-      end
-      
-      discrepancies
-    end
+            LOG error verification_error.message
     
-    private
+    IF LENGTH discrepancies > 0:
+        CALL alert_service.notify_balance_drift(discrepancies)
     
-    def self.already_snapshotted?(account, date, snapshot_type)
-      BalanceSnapshot
-        .for_account(account.id)
-        .where(snapshot_type: snapshot_type)
-        .where('captured_at >= ?', date.beginning_of_day)
-        .where('captured_at <= ?', date.end_of_day)
-        .exists?
-    end
+    RETURN discrepancies
+END FUNCTION
+
+// Helper functions
+FUNCTION already_snapshotted(account, date, snapshot_type):
+    RETURN EXISTS QUERY balance_snapshots
+        WHERE account_id = account.id
+        AND snapshot_type = snapshot_type
+        AND captured_at >= start of date
+        AND captured_at <= end of date
+END FUNCTION
+
+FUNCTION has_activity_since(account, since_time):
+    IF since_time IS NULL:
+        RETURN true
     
-    def self.account_activity_since?(account, since_time)
-      return true if since_time.nil?
-      
-      LedgerEntry
-        .joins(:ledger_transaction)
-        .where(account_id: account.id)
-        .where('ledger_transactions.posted_at > ?', since_time)
-        .exists?
-    end
-  end
-end
+    RETURN EXISTS QUERY ledger_entries
+        JOIN ledger_transactions ON ledger_entries.transaction_id = ledger_transactions.id
+        WHERE account_id = account.id
+        AND ledger_transactions.posted_at > since_time
+END FUNCTION
+
+FUNCTION get_latest_snapshot_before(account_id, timestamp):
+    RETURN QUERY balance_snapshots
+        WHERE account_id = account_id
+        AND captured_at < timestamp
+        ORDER BY captured_at DESC
+        LIMIT 1
+END FUNCTION
 ```
 
 #### Step 4: Background Job
 
-```ruby
-# app/jobs/ledger/create_balance_snapshots_job.rb
-module Ledger
-  class CreateBalanceSnapshotsJob < ApplicationJob
-    queue_as :maintenance
+```mermaid
+flowchart TD
+    Schedule[Scheduled Job Trigger] --> CreateJob[Create Snapshots Job]
+    CreateJob --> VerifyJob[Verify Snapshots Job]
+    VerifyJob --> Success[Log Success]
+    VerifyJob --> Error{Errors Found?}
+    Error -->|Yes| Alert[Send Alert]
+    Error -->|No| Success
     
-    def perform(date: Date.yesterday, snapshot_type: 'daily')
-      Rails.logger.info "Creating #{snapshot_type} balance snapshots for #{date}"
-      
-      case snapshot_type
-      when 'daily'
-        BalanceSnapshotService.create_daily_snapshots(date: date)
-      when 'end_of_day'
-        BalanceSnapshotService.create_end_of_day_snapshots(date: date)
-      else
-        raise ArgumentError, "Unknown snapshot type: #{snapshot_type}"
-      end
-    end
-  end
-end
+    style Schedule fill:#6366f1
+    style Success fill:#10b981
+    style Alert fill:#f59e0b
+```
 
-# app/jobs/ledger/verify_balance_snapshots_job.rb
-module Ledger
-  class VerifyBalanceSnapshotsJob < ApplicationJob
-    queue_as :maintenance
+```pseudocode
+JOB CreateBalanceSnapshotsJob:
+    queue: maintenance
     
-    retry_on StandardError, attempts: 3
+    FUNCTION execute(date, snapshot_type):
+        LOG "Creating " + snapshot_type + " balance snapshots for " + date
+        
+        IF snapshot_type == 'daily':
+            CALL create_daily_snapshots(date)
+        ELSE IF snapshot_type == 'end_of_day':
+            CALL create_end_of_day_snapshots(date)
+        ELSE:
+            RAISE error "Unknown snapshot type: " + snapshot_type
+    END FUNCTION
+END JOB
+
+JOB VerifyBalanceSnapshotsJob:
+    queue: maintenance
+    max_retries: 3
     
-    def perform(date: Date.yesterday)
-      discrepancies = BalanceSnapshotService.verify_snapshots(date: date)
-      
-      if discrepancies.any?
-        Rails.logger.error "Found #{discrepancies.count} balance snapshot discrepancies!"
-        # Alert the team
-        BalanceDriftMailer.alert(discrepancies).deliver_now
-      else
-        Rails.logger.info "All balance snapshots verified successfully"
-      end
-    end
-  end
-end
+    FUNCTION execute(date):
+        discrepancies = CALL verify_snapshots(date)
+        
+        IF LENGTH discrepancies > 0:
+            LOG error "Found " + LENGTH discrepancies + " balance snapshot discrepancies!"
+            CALL send_alert_email(discrepancies)
+        ELSE:
+            LOG "All balance snapshots verified successfully"
+    END FUNCTION
+END JOB
 ```
 
 #### Step 5: Usage Examples
 
-```ruby
-# Example 1: Get balance at a specific time (fast with snapshots)
-class BalanceLookupService
-  def self.balance_at(account_id, timestamp)
-    Ledger::BalanceSnapshotService.balance_at_time(account_id, timestamp)
-  end
-  
-  def self.balance_on_date(account_id, date)
-    end_of_day = date.to_time.end_of_day
-    balance_at(account_id, end_of_day)
-  end
-  
-  def self.balance_change_during(account_id, start_time, end_time)
-    start_balance = balance_at(account_id, start_time)
-    end_balance = balance_at(account_id, end_time)
+```pseudocode
+// Example 1: Get balance at a specific time (fast with snapshots)
+SERVICE BalanceLookupService:
+    FUNCTION get_balance_at(account_id, timestamp):
+        RETURN CALL get_balance_at_time(account_id, timestamp)
+    END FUNCTION
     
-    {
-      start_balance: start_balance,
-      end_balance: end_balance,
-      change: end_balance - start_balance
-    }
-  end
-end
-
-# Example 2: Generate compliance report
-class ComplianceReportService
-  def self.end_of_day_balances(date: Date.yesterday)
-    # Get all EOD snapshots for the date
-    snapshots = BalanceSnapshot
-      .end_of_day
-      .where('captured_at >= ?', date.beginning_of_day)
-      .where('captured_at <= ?', date.end_of_day)
-      .includes(:account)
+    FUNCTION get_balance_on_date(account_id, date):
+        end_of_day = GET end of day for date
+        RETURN CALL get_balance_at(account_id, end_of_day)
+    END FUNCTION
     
-    total_assets = snapshots
-      .select { |s| s.account.asset? }
-      .sum(&:balance)
-    
-    total_liabilities = snapshots
-      .select { |s| s.account.liability? }
-      .sum(&:balance)
-    
-    {
-      date: date,
-      snapshot_count: snapshots.count,
-      total_assets: total_assets,
-      total_liabilities: total_liabilities,
-      net_position: total_assets - total_liabilities,
-      generated_at: Time.current
-    }
-  end
-end
-
-# Example 3: Controller for audit queries
-class Api::BalanceSnapshotsController < ApplicationController
-  before_action :authenticate_user!
-  before_action :require_auditor_role
-  
-  def show
-    account = Account.find(params[:account_id])
-    timestamp = Time.parse(params[:timestamp])
-    
-    balance = BalanceLookupService.balance_at(account.id, timestamp)
-    snapshot = BalanceSnapshot.at_time(account.id, timestamp)
-    
-    render json: {
-      account_id: account.id,
-      account_number: account.account_number,
-      timestamp: timestamp,
-      balance: balance,
-      based_on_snapshot: snapshot.present?,
-      snapshot_captured_at: snapshot&.captured_at,
-      entries_since_snapshot: snapshot ? 
-        count_entries_since(account.id, snapshot.captured_at, timestamp) : nil
-    }
-  end
-  
-  def history
-    account = Account.find(params[:account_id])
-    start_date = Date.parse(params[:start_date])
-    end_date = Date.parse(params[:end_date])
-    
-    snapshots = BalanceSnapshot
-      .for_account(account.id)
-      .where('captured_at >= ?', start_date.beginning_of_day)
-      .where('captured_at <= ?', end_date.end_of_day)
-      .order(captured_at: :asc)
-    
-    render json: {
-      account_id: account.id,
-      snapshots: snapshots.map do |s|
-        {
-          captured_at: s.captured_at,
-          balance: s.balance,
-          available_balance: s.available_balance,
-          net_change: s.net_change,
-          transaction_count: s.transaction_count
+    FUNCTION get_balance_change(account_id, start_time, end_time):
+        start_balance = CALL get_balance_at(account_id, start_time)
+        end_balance = CALL get_balance_at(account_id, end_time)
+        
+        RETURN {
+            start_balance: start_balance,
+            end_balance: end_balance,
+            change: end_balance - start_balance
         }
-      end
-    }
-  end
-  
-  private
-  
-  def count_entries_since(account_id, since_time, until_time)
-    LedgerEntry
-      .joins(:ledger_transaction)
-      .where(account_id: account_id)
-      .where('ledger_transactions.posted_at > ?', since_time)
-      .where('ledger_transactions.posted_at <= ?', until_time)
-      .count
-  end
-  
-  def require_auditor_role
-    unless current_user.has_role?(:auditor) || current_user.has_role?(:admin)
-      render json: { error: 'Access denied' }, status: 403
-    end
-  end
-end
+    END FUNCTION
+END SERVICE
+
+// Example 2: Generate compliance report
+SERVICE ComplianceReportService:
+    FUNCTION generate_end_of_day_balances(date):
+        // Get all EOD snapshots for the date
+        snapshots = QUERY balance_snapshots
+            WHERE snapshot_type = 'end_of_day'
+            AND captured_at >= start of date
+            AND captured_at <= end of date
+            JOIN accounts ON balance_snapshots.account_id = accounts.id
+        
+        total_assets = SUM balance FROM snapshots WHERE account.type = 'asset'
+        total_liabilities = SUM balance FROM snapshots WHERE account.type = 'liability'
+        
+        RETURN {
+            date: date,
+            snapshot_count: COUNT snapshots,
+            total_assets: total_assets,
+            total_liabilities: total_liabilities,
+            net_position: total_assets - total_liabilities,
+            generated_at: NOW()
+        }
+    END FUNCTION
+END SERVICE
+
+// Example 3: API Controller for audit queries
+CONTROLLER BalanceSnapshotsController:
+    authentication: required
+    authorization: auditor OR admin
+    
+    FUNCTION show(account_id, timestamp):
+        account = GET accounts WHERE id = account_id
+        parsed_time = PARSE timestamp AS datetime
+        
+        balance = CALL BalanceLookupService.get_balance_at(account.id, parsed_time)
+        snapshot = CALL get_snapshot_at_time(account.id, parsed_time)
+        
+        RETURN {
+            account_id: account.id,
+            account_number: account.account_number,
+            timestamp: parsed_time,
+            balance: balance,
+            based_on_snapshot: snapshot IS NOT NULL,
+            snapshot_captured_at: IF snapshot THEN snapshot.captured_at ELSE NULL,
+            entries_since_snapshot: IF snapshot THEN 
+                CALL count_entries_since(account.id, snapshot.captured_at, parsed_time)
+            ELSE NULL
+        }
+    END FUNCTION
+    
+    FUNCTION history(account_id, start_date, end_date):
+        account = GET accounts WHERE id = account_id
+        start = PARSE start_date AS date
+        end = PARSE end_date AS date
+        
+        snapshots = QUERY balance_snapshots
+            WHERE account_id = account.id
+            AND captured_at >= start of start_date
+            AND captured_at <= end of end_date
+            ORDER BY captured_at ASC
+        
+        RETURN {
+            account_id: account.id,
+            snapshots: MAP snapshots TO {
+                captured_at: snapshot.captured_at,
+                balance: snapshot.balance,
+                available_balance: snapshot.available_balance,
+                net_change: snapshot.net_change,
+                transaction_count: snapshot.transaction_count
+            }
+        }
+    END FUNCTION
+END CONTROLLER
+
+FUNCTION count_entries_since(account_id, since_time, until_time):
+    RETURN QUERY COUNT ledger_entries
+        JOIN ledger_transactions ON ledger_entries.transaction_id = ledger_transactions.id
+        WHERE account_id = account_id
+        AND ledger_transactions.posted_at > since_time
+        AND ledger_transactions.posted_at <= until_time
+END FUNCTION
 ```
 
 #### Step 6: Schedule Snapshots
 
-```ruby
-# config/schedule.rb
-every 1.day, at: '1:00 am' do
-  rake 'ledger:create_daily_snapshots'
-end
+```pseudocode
+SCHEDULE DailySnapshotJob:
+    run_at: "01:00"
+    action: CALL create_daily_snapshots(YESTERDAY)
+END SCHEDULE
 
-every 1.day, at: '2:00 am' do
-  rake 'ledger:create_eod_snapshots'
-end
+SCHEDULE EndOfDaySnapshotJob:
+    run_at: "02:00"
+    action: CALL create_end_of_day_snapshots(YESTERDAY)
+END SCHEDULE
 
-every 1.day, at: '3:00 am' do
-  rake 'ledger:verify_snapshots'
-end
+SCHEDULE VerifySnapshotsJob:
+    run_at: "03:00"
+    action: CALL verify_snapshots(YESTERDAY)
+END SCHEDULE
 
-# lib/tasks/ledger_snapshots.rake
-namespace :ledger do
-  desc 'Create daily balance snapshots'
-  task create_daily_snapshots: :environment do
-    date = Date.yesterday
-    Ledger::CreateBalanceSnapshotsJob.perform_now(date: date, snapshot_type: 'daily')
-  end
-  
-  desc 'Create end-of-day balance snapshots'
-  task create_eod_snapshots: :environment do
-    date = Date.yesterday
-    Ledger::CreateBalanceSnapshotsJob.perform_now(date: date, snapshot_type: 'end_of_day')
-  end
-  
-  desc 'Verify balance snapshots for drift'
-  task verify_snapshots: :environment do
-    date = Date.yesterday
-    Ledger::VerifyBalanceSnapshotsJob.perform_now(date: date)
-  end
-  
-  desc 'Backfill snapshots for date range (use with caution)'
-  task :backfill_snapshots, [:start_date, :end_date] => :environment do |t, args|
-    start_date = Date.parse(args[:start_date])
-    end_date = Date.parse(args[:end_date])
+// CLI Task: Create daily snapshots
+TASK create_daily_snapshots:
+    date = YESTERDAY
+    CALL CreateBalanceSnapshotsJob.execute(date, 'daily')
+    OUTPUT "Created daily snapshots for " + date
+END TASK
+
+// CLI Task: Create end-of-day snapshots
+TASK create_eod_snapshots:
+    date = YESTERDAY
+    CALL CreateBalanceSnapshotsJob.execute(date, 'end_of_day')
+    OUTPUT "Created EOD snapshots for " + date
+END TASK
+
+// CLI Task: Verify snapshots
+TASK verify_snapshots:
+    date = YESTERDAY
+    CALL VerifyBalanceSnapshotsJob.execute(date)
+END TASK
+
+// CLI Task: Backfill snapshots (use with caution)
+TASK backfill_snapshots(start_date, end_date):
+    start = PARSE start_date AS date
+    end = PARSE end_date AS date
     
-    (start_date..end_date).each do |date|
-      puts "Creating snapshots for #{date}..."
-      Ledger::BalanceSnapshotService.create_end_of_day_snapshots(date: date)
-    end
+    FOR EACH date IN RANGE start TO end:
+        OUTPUT "Creating snapshots for " + date + "..."
+        CALL create_end_of_day_snapshots(date)
     
-    puts "Backfill complete!"
-  end
-end
+    OUTPUT "Backfill complete!"
+END TASK
 ```
 
 ### Key Takeaways
@@ -916,603 +1045,692 @@ sequenceDiagram
 
 **Solution: Track both phases explicitly.**
 
-### Rails Implementation
+### Implementation
 
 #### Step 1: Enhanced Transaction Model with Settlement Tracking
 
-```ruby
-# db/migrate/xxx_add_settlement_tracking.rb
-class AddSettlementTracking < ActiveRecord::Migration[7.0]
-  def change
-    # Track authorization vs settlement
-    add_column :ledger_transactions, :transaction_phase, :string, default: 'single'
-    add_column :ledger_transactions, :parent_transaction_id, :bigint
-    add_column :ledger_transactions, :authorization_code, :string
-    add_column :ledger_transactions, :authorized_at, :datetime
-    add_column :ledger_transactions, :settled_at, :datetime
-    add_column :ledger_transactions, :settlement_batch_id, :string
+```mermaid
+erDiagram
+    LEDGER_TRANSACTIONS {
+        uuid id PK
+        string external_ref
+        string transaction_phase
+        uuid parent_transaction_id
+        string authorization_code
+        datetime authorized_at
+        datetime settled_at
+        string settlement_batch_id
+        decimal gross_amount
+        decimal fee_amount
+        decimal net_amount
+        string status
+    }
     
-    # Track fee breakdown (important for reconciliation)
-    add_column :ledger_transactions, :gross_amount, :decimal, precision: 19, scale: 4
-    add_column :ledger_transactions, :fee_amount, :decimal, precision: 19, scale: 4
-    add_column :ledger_transactions, :net_amount, :decimal, precision: 19, scale: 4
+    SETTLEMENT_BATCHES {
+        uuid id PK
+        string batch_id UK
+        string processor
+        date settlement_date
+        decimal total_gross
+        decimal total_fees
+        decimal total_net
+        int transaction_count
+        string status
+        json processor_response
+    }
     
-    # Indexes for settlement queries
-    add_index :ledger_transactions, [:transaction_phase, :status]
-    add_index :ledger_transactions, :parent_transaction_id
-    add_index :ledger_transactions, :authorization_code
-    add_index :ledger_transactions, :settlement_batch_id
-    
-    # Create settlement batches table
-    create_table :settlement_batches do |t|
-      t.string :batch_id, null: false
-      t.string :processor, null: false # 'stripe', 'adyen', etc.
-      t.date :settlement_date
-      t.decimal :total_gross, precision: 19, scale: 4
-      t.decimal :total_fees, precision: 19, scale: 4
-      t.decimal :total_net, precision: 19, scale: 4
-      t.integer :transaction_count
-      t.string :status # 'pending', 'processing', 'completed', 'failed'
-      t.jsonb :processor_response
-      t.timestamps
-      
-      t.index :batch_id, unique: true
-      t.index [:processor, :settlement_date]
-    end
-  end
-end
+    LEDGER_TRANSACTIONS ||--o| SETTLEMENT_BATCHES : "belongs to"
+    LEDGER_TRANSACTIONS ||--o| LEDGER_TRANSACTIONS : "parent/child"
+```
 
-# app/models/settlement_batch.rb
-class SettlementBatch < ApplicationRecord
-  has_many :ledger_transactions, foreign_key: 'settlement_batch_id', primary_key: 'batch_id'
-  
-  validates :batch_id, presence: true, uniqueness: true
-  validates :processor, presence: true
-  validates :status, inclusion: { in: %w[pending processing completed failed] }
-  
-  # Calculate totals from transactions
-  def recalculate_totals!
-    self.total_gross = ledger_transactions.sum(:gross_amount)
-    self.total_fees = ledger_transactions.sum(:fee_amount)
-    self.total_net = ledger_transactions.sum(:net_amount)
-    self.transaction_count = ledger_transactions.count
-    save!
-  end
-end
+```sql
+-- Add settlement tracking to ledger_transactions
+ALTER TABLE ledger_transactions 
+    ADD COLUMN transaction_phase VARCHAR(20) DEFAULT 'single',
+    ADD COLUMN parent_transaction_id UUID REFERENCES ledger_transactions(id),
+    ADD COLUMN authorization_code VARCHAR(255),
+    ADD COLUMN authorized_at TIMESTAMP,
+    ADD COLUMN settled_at TIMESTAMP,
+    ADD COLUMN settlement_batch_id VARCHAR(255),
+    ADD COLUMN gross_amount DECIMAL(19,4),
+    ADD COLUMN fee_amount DECIMAL(19,4),
+    ADD COLUMN net_amount DECIMAL(19,4);
+
+-- Indexes for settlement queries
+CREATE INDEX idx_txn_phase_status ON ledger_transactions(transaction_phase, status);
+CREATE INDEX idx_txn_parent ON ledger_transactions(parent_transaction_id);
+CREATE INDEX idx_txn_auth_code ON ledger_transactions(authorization_code);
+CREATE INDEX idx_txn_batch ON ledger_transactions(settlement_batch_id);
+
+-- Create settlement_batches table
+CREATE TABLE settlement_batches (
+    id UUID PRIMARY KEY,
+    batch_id VARCHAR(255) NOT NULL UNIQUE,
+    processor VARCHAR(50) NOT NULL,
+    settlement_date DATE,
+    total_gross DECIMAL(19,4),
+    total_fees DECIMAL(19,4),
+    total_net DECIMAL(19,4),
+    transaction_count INTEGER,
+    status VARCHAR(20), -- 'pending', 'processing', 'completed', 'failed'
+    processor_response JSON,
+    created_at TIMESTAMP NOT NULL,
+    updated_at TIMESTAMP NOT NULL
+);
+
+CREATE INDEX idx_batch_processor_date ON settlement_batches(processor, settlement_date);
+```
+
+```pseudocode
+STRUCT SettlementBatch:
+    id: UUID
+    batch_id: STRING
+    processor: STRING
+    settlement_date: DATE
+    total_gross: DECIMAL
+    total_fees: DECIMAL
+    total_net: DECIMAL
+    transaction_count: INT
+    status: STRING
+    processor_response: JSON
+    created_at: TIMESTAMP
+    updated_at: TIMESTAMP
+
+FUNCTION recalculate_batch_totals(batch):
+    batch.total_gross = SUM gross_amount FROM ledger_transactions 
+        WHERE settlement_batch_id = batch.batch_id
+    
+    batch.total_fees = SUM fee_amount FROM ledger_transactions 
+        WHERE settlement_batch_id = batch.batch_id
+    
+    batch.total_net = SUM net_amount FROM ledger_transactions 
+        WHERE settlement_batch_id = batch.batch_id
+    
+    batch.transaction_count = COUNT ledger_transactions 
+        WHERE settlement_batch_id = batch.batch_id
+    
+    SAVE batch
+END FUNCTION
 ```
 
 #### Step 2: Authorization Service
 
-```ruby
-# app/services/ledger/authorization_service.rb
-module Ledger
-  class AuthorizationService
-    def initialize(payment_processor: nil)
-      @processor = payment_processor || Stripe::Client.new
-    end
+```mermaid
+flowchart TD
+    Start[Authorize Payment] --> CallProcessor[Call Payment Processor]
+    CallProcessor --> Success{Success?}
+    Success -->|No| ReturnError[Return Error]
+    Success -->|Yes| CreateAuth[Create Auth Transaction]
+    CreateAuth --> CreateEntries[Create Ledger Entries]
+    CreateEntries --> CreateRes[Create Reservation]
+    CreateRes --> ReturnSuccess[Return Success]
     
-    # Phase 1: Authorize the payment (hold funds)
-    def authorize_payment(
-      amount:, 
-      currency:, 
-      payment_method:, 
-      merchant_account_id:,
-      customer_account_id:,
-      description: nil,
-      metadata: {}
-    )
-      ActiveRecord::Base.transaction do
-        # 1. Call payment processor to authorize
-        authorization = @processor.authorize(
-          amount: (amount * 100).to_i, # cents
-          currency: currency.downcase,
-          payment_method: payment_method,
-          capture: false # Don't settle yet!
-        )
+    style Start fill:#6366f1
+    style ReturnSuccess fill:#10b981
+    style ReturnError fill:#ef4444
+```
+
+```mermaid
+flowchart TD
+    Settle[Settle Payment] --> Validate[Validate Auth Exists]
+    Validate --> CheckExpired{Expired?}
+    CheckExpired -->|Yes| Error[Return Error]
+    CheckExpired -->|No| Capture[Capture with Processor]
+    Capture --> CalcFees[Calculate Fees]
+    CalcFees --> CreateSettle[Create Settlement Transaction]
+    CreateSettle --> MoveFunds[Move Funds Between Accounts]
+    MoveFunds --> Link[Link Auth to Settlement]
+    Link --> Release[Release Reservation]
+    Link --> Return[Return Settlement Details]
+    
+    style Settle fill:#6366f1
+    style Return fill:#10b981
+    style Error fill:#ef4444
+```
+
+```pseudocode
+SERVICE AuthorizationService:
+    payment_processor: PaymentProcessor
+    
+    // Phase 1: Authorize the payment (hold funds)
+    FUNCTION authorize_payment(
+        amount, 
+        currency, 
+        payment_method, 
+        merchant_account_id,
+        customer_account_id,
+        description,
+        metadata
+    ):
+        BEGIN TRANSACTION
+            
+            // 1. Call payment processor to authorize
+            authorization = CALL payment_processor.authorize(
+                amount: amount,
+                currency: currency,
+                payment_method: payment_method,
+                capture: false
+            )
+            
+            IF authorization.status != 'succeeded':
+                ROLLBACK TRANSACTION
+                RETURN { success: false, error: authorization.failure_message }
+            
+            // 2. Create authorization transaction in ledger
+            auth_transaction = CREATE ledger_transactions {
+                external_ref: "auth:" + authorization.id,
+                transaction_phase: 'authorization',
+                authorization_code: authorization.id,
+                authorized_at: NOW(),
+                status: 'posted',
+                description: "Authorization: " + description,
+                gross_amount: amount,
+                fee_amount: 0,
+                net_amount: 0,
+                metadata: MERGE metadata WITH {
+                    authorization_id: authorization.id,
+                    payment_method: payment_method
+                }
+            }
+            
+            // 3. Create entries (debit customer, credit holding account)
+            CREATE ledger_entry {
+                transaction_id: auth_transaction.id,
+                account_id: customer_account_id,
+                direction: 'debit',
+                amount: amount,
+                currency: currency,
+                description: "Authorization hold"
+            }
+            
+            holding_account = GET accounts 
+                WHERE account_number = "holding_" + LOWER(currency)
+            
+            CREATE ledger_entry {
+                transaction_id: auth_transaction.id,
+                account_id: holding_account.id,
+                direction: 'credit',
+                amount: amount,
+                currency: currency,
+                description: "Authorization hold for " + authorization.id
+            }
+            
+            // 4. Create reservation to track the hold
+            CREATE reservations {
+                account_id: customer_account_id,
+                transaction_id: auth_transaction.id,
+                amount: amount,
+                reservation_type: 'authorization',
+                expires_at: NOW() + 7 days,
+                metadata: { authorization_id: authorization.id }
+            }
+            
+        COMMIT TRANSACTION
         
-        unless authorization.status == 'succeeded'
-          raise AuthorizationFailedError, "Authorization failed: #{authorization.failure_message}"
-        end
-        
-        # 2. Create authorization transaction in ledger
-        # This reserves funds but doesn't move them
-        auth_transaction = LedgerTransaction.create!(
-          external_ref: "auth:#{authorization.id}",
-          transaction_phase: 'authorization',
-          authorization_code: authorization.id,
-          authorized_at: Time.current,
-          status: 'posted', # Authorizations post immediately
-          description: "Authorization: #{description}",
-          gross_amount: amount,
-          fee_amount: 0, # No fees on authorization
-          net_amount: 0,
-          metadata: metadata.merge(
+        RETURN {
+            success: true,
             authorization_id: authorization.id,
-            payment_method: payment_method
-          )
-        )
-        
-        # 3. Create entries (debit customer, credit pending/holding account)
-        # Debit customer account (hold their funds)
-        LedgerEntry.create!(
-          ledger_transaction: auth_transaction,
-          account_id: customer_account_id,
-          direction: 'debit',
-          amount: amount,
-          currency: currency,
-          description: "Authorization hold"
-        )
-        
-        # Credit holding account (funds are held, not yet merchant's)
-        holding_account = Account.find_by!(account_number: "holding_#{currency.downcase}")
-        LedgerEntry.create!(
-          ledger_transaction: auth_transaction,
-          account_id: holding_account.id,
-          direction: 'credit',
-          amount: amount,
-          currency: currency,
-          description: "Authorization hold for #{authorization.id}"
-        )
-        
-        # 4. Create reservation to track the hold
-        Reservation.create!(
-          account_id: customer_account_id,
-          ledger_transaction: auth_transaction,
-          amount: amount,
-          reservation_type: 'authorization',
-          expires_at: 7.days.from_now, # Authorizations typically expire
-          metadata: { authorization_id: authorization.id }
-        )
-        
-        {
-          success: true,
-          authorization_id: authorization.id,
-          transaction_id: auth_transaction.id,
-          status: 'authorized'
+            transaction_id: auth_transaction.id,
+            status: 'authorized'
         }
-      end
-    rescue AuthorizationFailedError => e
-      {
-        success: false,
-        error: e.message
-      }
-    end
+    END FUNCTION
     
-    # Phase 2: Capture/Settle the authorized payment
-    def settle_payment(authorization_id, final_amount: nil)
-      auth_transaction = LedgerTransaction.find_by!(
-        authorization_code: authorization_id,
-        transaction_phase: 'authorization'
-      )
-      
-      raise "Authorization already settled" if auth_transaction.settled_at.present?
-      raise "Authorization expired" if auth_transaction.reservation&.expired?
-      
-      # Use original amount if not specified
-      final_amount ||= auth_transaction.gross_amount
-      
-      ActiveRecord::Base.transaction do
-        # 1. Capture the payment with processor
-        capture = @processor.capture(
-          authorization_id,
-          amount: (final_amount * 100).to_i
-        )
+    // Phase 2: Capture/Settle the authorized payment
+    FUNCTION settle_payment(authorization_id, final_amount):
+        auth_transaction = GET ledger_transactions
+            WHERE authorization_code = authorization_id
+            AND transaction_phase = 'authorization'
         
-        # 2. Calculate fees (processor fees are taken at settlement)
-        fee_amount = calculate_fees(final_amount, capture)
-        net_amount = final_amount - fee_amount
+        IF auth_transaction.settled_at IS NOT NULL:
+            RAISE error "Authorization already settled"
         
-        # 3. Create settlement transaction
-        settlement_transaction = LedgerTransaction.create!(
-          external_ref: "capture:#{capture.id}",
-          transaction_phase: 'settlement',
-          parent_transaction_id: auth_transaction.id,
-          authorization_code: authorization_id,
-          authorized_at: auth_transaction.authorized_at,
-          settled_at: Time.current,
-          status: 'posted',
-          description: "Settlement for authorization #{authorization_id}",
-          gross_amount: final_amount,
-          fee_amount: fee_amount,
-          net_amount: net_amount,
-          metadata: {
-            capture_id: capture.id,
-            original_authorization_id: authorization_id,
-            fee_breakdown: capture.fee_details
-          }
-        )
+        IF auth_transaction.reservation.expired:
+            RAISE error "Authorization expired"
         
-        # 4. Move funds from holding to actual accounts
-        holding_account = Account.find_by!(account_number: "holding_#{auth_transaction.ledger_entries.first.currency.downcase}")
-        merchant_account = Account.find_by!(account_number: "revenue_sales")
-        fee_account = Account.find_by!(account_number: "expense_processor_fees")
+        IF final_amount IS NULL:
+            final_amount = auth_transaction.gross_amount
         
-        # Debit holding account (release the hold)
-        LedgerEntry.create!(
-          ledger_transaction: settlement_transaction,
-          account_id: holding_account.id,
-          direction: 'debit',
-          amount: final_amount,
-          currency: auth_transaction.ledger_entries.first.currency,
-          description: "Release authorization hold"
-        )
+        BEGIN TRANSACTION
+            
+            // 1. Capture the payment with processor
+            capture = CALL payment_processor.capture(
+                authorization_id,
+                amount: final_amount
+            )
+            
+            // 2. Calculate fees
+            fee_amount = CALL calculate_fees(final_amount, capture)
+            net_amount = final_amount - fee_amount
+            
+            // 3. Create settlement transaction
+            currency = auth_transaction.ledger_entries[0].currency
+            
+            settlement_transaction = CREATE ledger_transactions {
+                external_ref: "capture:" + capture.id,
+                transaction_phase: 'settlement',
+                parent_transaction_id: auth_transaction.id,
+                authorization_code: authorization_id,
+                authorized_at: auth_transaction.authorized_at,
+                settled_at: NOW(),
+                status: 'posted',
+                description: "Settlement for authorization " + authorization_id,
+                gross_amount: final_amount,
+                fee_amount: fee_amount,
+                net_amount: net_amount,
+                metadata: {
+                    capture_id: capture.id,
+                    original_authorization_id: authorization_id,
+                    fee_breakdown: capture.fee_details
+                }
+            }
+            
+            // 4. Move funds from holding to actual accounts
+            holding_account = GET accounts 
+                WHERE account_number = "holding_" + LOWER(currency)
+            merchant_account = GET accounts 
+                WHERE account_number = "revenue_sales"
+            fee_account = GET accounts 
+                WHERE account_number = "expense_processor_fees"
+            
+            // Debit holding account (release the hold)
+            CREATE ledger_entry {
+                transaction_id: settlement_transaction.id,
+                account_id: holding_account.id,
+                direction: 'debit',
+                amount: final_amount,
+                currency: currency,
+                description: "Release authorization hold"
+            }
+            
+            // Credit merchant revenue (net amount)
+            CREATE ledger_entry {
+                transaction_id: settlement_transaction.id,
+                account_id: merchant_account.id,
+                direction: 'credit',
+                amount: net_amount,
+                currency: currency,
+                description: "Revenue from settlement"
+            }
+            
+            // Credit fee expense account
+            CREATE ledger_entry {
+                transaction_id: settlement_transaction.id,
+                account_id: fee_account.id,
+                direction: 'credit',
+                amount: fee_amount,
+                currency: currency,
+                description: "Processing fee"
+            }
+            
+            // 5. Link authorization to settlement
+            UPDATE ledger_transactions SET
+                settled_at = NOW(),
+                net_amount = net_amount,
+                fee_amount = fee_amount
+            WHERE id = auth_transaction.id
+            
+            // 6. Release the reservation
+            DELETE reservations WHERE transaction_id = auth_transaction.id
+            
+        COMMIT TRANSACTION
         
-        # Credit merchant revenue (net amount)
-        merchant_revenue_account = Account.find(merchant_account_id)
-        LedgerEntry.create!(
-          ledger_transaction: settlement_transaction,
-          account_id: merchant_revenue_account.id,
-          direction: 'credit',
-          amount: net_amount,
-          currency: auth_transaction.ledger_entries.first.currency,
-          description: "Revenue from settlement"
-        )
-        
-        # Credit fee expense account
-        LedgerEntry.create!(
-          ledger_transaction: settlement_transaction,
-          account_id: fee_account.id,
-          direction: 'credit',
-          amount: fee_amount,
-          currency: auth_transaction.ledger_entries.first.currency,
-          description: "Processing fee"
-        )
-        
-        # 5. Link authorization to settlement
-        auth_transaction.update!(
-          settled_at: Time.current,
-          net_amount: net_amount,
-          fee_amount: fee_amount
-        )
-        
-        # 6. Release the reservation
-        auth_transaction.reservation&.destroy
-        
-        {
-          success: true,
-          settlement_transaction_id: settlement_transaction.id,
-          gross_amount: final_amount,
-          fee_amount: fee_amount,
-          net_amount: net_amount
+        RETURN {
+            success: true,
+            settlement_transaction_id: settlement_transaction.id,
+            gross_amount: final_amount,
+            fee_amount: fee_amount,
+            net_amount: net_amount
         }
-      end
-    end
+    END FUNCTION
     
-    # Void an authorization (cancel before settlement)
-    def void_authorization(authorization_id, reason: nil)
-      auth_transaction = LedgerTransaction.find_by!(
-        authorization_code: authorization_id,
-        transaction_phase: 'authorization'
-      )
-      
-      raise "Authorization already settled" if auth_transaction.settled_at.present?
-      
-      ActiveRecord::Base.transaction do
-        # 1. Void with processor
-        @processor.void(authorization_id)
+    // Void an authorization (cancel before settlement)
+    FUNCTION void_authorization(authorization_id, reason):
+        auth_transaction = GET ledger_transactions
+            WHERE authorization_code = authorization_id
+            AND transaction_phase = 'authorization'
         
-        # 2. Reverse the authorization transaction
-        reversal_service = TransactionLifecycleService.new(auth_transaction)
-        reversal_service.reverse_transaction(reason: "Void: #{reason}")
+        IF auth_transaction.settled_at IS NOT NULL:
+            RAISE error "Authorization already settled"
         
-        # 3. Release reservation
-        auth_transaction.reservation&.destroy
+        BEGIN TRANSACTION
+            
+            // 1. Void with processor
+            CALL payment_processor.void(authorization_id)
+            
+            // 2. Reverse the authorization transaction
+            CALL reverse_transaction(auth_transaction, "Void: " + reason)
+            
+            // 3. Release reservation
+            DELETE reservations WHERE transaction_id = auth_transaction.id
+            
+            // 4. Mark as voided
+            UPDATE ledger_transactions SET
+                status = 'reversed',
+                metadata = MERGE metadata WITH {
+                    voided_at: NOW(),
+                    void_reason: reason
+                }
+            WHERE id = auth_transaction.id
+            
+        COMMIT TRANSACTION
         
-        # 4. Mark as voided
-        auth_transaction.update!(
-          status: 'reversed',
-          metadata: auth_transaction.metadata.merge(voided_at: Time.current, void_reason: reason)
+        RETURN { success: true, message: "Authorization voided" }
+    END FUNCTION
+    
+    // Process a batch settlement (end of day)
+    FUNCTION process_settlement_batch(settlement_date):
+        LOG "Processing settlement batch for " + settlement_date
+        
+        // 1. Get settlement batch from processor
+        batch_data = CALL payment_processor.get_settlement_batch(settlement_date)
+        
+        // 2. Create or update settlement batch record
+        batch = GET settlement_batches WHERE batch_id = batch_data.id
+        
+        IF batch IS NULL:
+            batch = CREATE settlement_batches {
+                batch_id: batch_data.id,
+                processor: 'stripe',
+                settlement_date: settlement_date,
+                status: 'processing',
+                processor_response: batch_data
+            }
+        
+        // 3. Process each transaction in batch
+        FOR EACH processor_txn IN batch_data.transactions:
+            CALL process_batch_transaction(processor_txn, batch)
+        
+        // 4. Recalculate totals
+        CALL recalculate_batch_totals(batch)
+        UPDATE settlement_batches SET status = 'completed' WHERE id = batch.id
+        
+        LOG "Settlement batch processed: " + batch.transaction_count + 
+            " transactions, " + batch.total_net + " net"
+        
+        RETURN batch
+    END FUNCTION
+    
+    // Private helper functions
+    FUNCTION calculate_fees(amount, capture_response):
+        // Implement your fee structure
+        // This is simplified - real implementations need complex fee logic
+        RETURN ROUND(amount * 0.029 + 0.30, 2) // 2.9% + 30c
+    END FUNCTION
+    
+    FUNCTION process_batch_transaction(processor_txn, batch):
+        // Find the authorization
+        auth_transaction = GET ledger_transactions
+            WHERE authorization_code = processor_txn.authorization_id
+        
+        IF auth_transaction IS NULL:
+            LOG error "Authorization not found for batch transaction: " + processor_txn.id
+            RETURN
+        
+        // Create settlement
+        result = CALL settle_payment(
+            auth_transaction.authorization_code,
+            final_amount: processor_txn.amount
         )
         
-        { success: true, message: "Authorization voided" }
-      end
-    end
-    
-    # Process a batch settlement (end of day)
-    def process_settlement_batch(settlement_date: Date.yesterday)
-      Rails.logger.info "Processing settlement batch for #{settlement_date}"
-      
-      # 1. Get settlement batch from processor
-      batch_data = @processor.get_settlement_batch(settlement_date)
-      
-      # 2. Create or update settlement batch record
-      batch = SettlementBatch.find_or_create_by!(batch_id: batch_data.id) do |b|
-        b.processor = 'stripe'
-        b.settlement_date = settlement_date
-        b.status = 'processing'
-        b.processor_response = batch_data.to_json
-      end
-      
-      # 3. Process each transaction in batch
-      batch_data.transactions.each do |processor_txn|
-        process_batch_transaction(processor_txn, batch)
-      end
-      
-      # 4. Recalculate totals
-      batch.recalculate_totals!
-      batch.update!(status: 'completed')
-      
-      Rails.logger.info "Settlement batch processed: #{batch.transaction_count} transactions, #{batch.total_net} net"
-      
-      batch
-    end
-    
-    private
-    
-    def calculate_fees(amount, capture_response)
-      # Implement your fee structure
-      # This is simplified - real implementations need complex fee logic
-      (amount * 0.029 + 0.30).round(2) # 2.9% + 30c
-    end
-    
-    def process_batch_transaction(processor_txn, batch)
-      # Find the authorization
-      auth_transaction = LedgerTransaction.find_by(
-        authorization_code: processor_txn.authorization_id
-      )
-      
-      unless auth_transaction
-        Rails.logger.error "Authorization not found for batch transaction: #{processor_txn.id}"
-        return
-      end
-      
-      # Create settlement
-      result = settle_payment(
-        auth_transaction.authorization_code,
-        final_amount: processor_txn.amount / 100.0
-      )
-      
-      if result[:success]
-        # Link to batch
-        LedgerTransaction.find(result[:settlement_transaction_id])
-          .update!(settlement_batch_id: batch.batch_id)
-      end
-    end
-  end
-  
-  class AuthorizationFailedError < StandardError; end
-end
+        IF result.success:
+            UPDATE ledger_transactions SET
+                settlement_batch_id = batch.batch_id
+            WHERE id = result.settlement_transaction_id
+    END FUNCTION
+END SERVICE
 ```
 
 #### Step 3: Controllers and API
 
-```ruby
-# app/controllers/api/authorizations_controller.rb
-module Api
-  class AuthorizationsController < ApplicationController
-    before_action :authenticate_user!
+```pseudocode
+CONTROLLER AuthorizationsController:
+    authentication: required
     
-    def create
-      service = Ledger::AuthorizationService.new
-      
-      result = service.authorize_payment(
-        amount: params[:amount].to_d,
-        currency: params[:currency],
-        payment_method: params[:payment_method_id],
-        merchant_account_id: current_user.merchant_account_id,
-        customer_account_id: params[:account_id],
-        description: params[:description],
-        metadata: { order_id: params[:order_id] }
-      )
-      
-      if result[:success]
-        render json: {
-          authorization_id: result[:authorization_id],
-          status: 'authorized',
-          transaction_id: result[:transaction_id]
+    FUNCTION authorize_payment(request):
+        service = CREATE AuthorizationService()
+        
+        result = CALL service.authorize_payment(
+            amount: PARSE request.amount AS decimal,
+            currency: request.currency,
+            payment_method: request.payment_method_id,
+            merchant_account_id: current_user.merchant_account_id,
+            customer_account_id: request.account_id,
+            description: request.description,
+            metadata: { order_id: request.order_id }
+        )
+        
+        IF result.success:
+            RETURN {
+                authorization_id: result.authorization_id,
+                status: 'authorized',
+                transaction_id: result.transaction_id
+            }
+        ELSE:
+            RETURN { error: result.error } WITH STATUS 422
+    END FUNCTION
+    
+    FUNCTION capture_payment(request):
+        service = CREATE AuthorizationService()
+        
+        result = CALL service.settle_payment(
+            request.authorization_id,
+            final_amount: IF request.final_amount THEN PARSE request.final_amount AS decimal ELSE NULL
+        )
+        
+        IF result.success:
+            RETURN {
+                settlement_id: result.settlement_transaction_id,
+                status: 'settled',
+                gross_amount: result.gross_amount,
+                fee_amount: result.fee_amount,
+                net_amount: result.net_amount
+            }
+        ELSE:
+            RETURN { error: result.error } WITH STATUS 422
+    END FUNCTION
+    
+    FUNCTION void_authorization(request):
+        service = CREATE AuthorizationService()
+        
+        result = CALL service.void_authorization(
+            request.authorization_id,
+            reason: request.reason
+        )
+        
+        IF result.success:
+            RETURN { status: 'voided' }
+        ELSE:
+            RETURN { error: result.error } WITH STATUS 422
+    END FUNCTION
+    
+    FUNCTION list_pending_authorizations():
+        authorizations = QUERY ledger_transactions
+            WHERE transaction_phase = 'authorization'
+            AND settled_at IS NULL
+            AND status != 'reversed'
+            JOIN ledger_entries ON ledger_transactions.id = ledger_entries.transaction_id
+            ORDER BY authorized_at DESC
+        
+        RETURN MAP authorizations TO {
+            id: auth.id,
+            authorization_code: auth.authorization_code,
+            amount: auth.gross_amount,
+            currency: auth.ledger_entries[0].currency,
+            authorized_at: auth.authorized_at,
+            expires_at: auth.reservation.expires_at,
+            status: IF auth.settled_at THEN 'settled' ELSE 'pending'
         }
-      else
-        render json: { error: result[:error] }, status: 422
-      end
-    end
-    
-    def capture
-      service = Ledger::AuthorizationService.new
-      
-      result = service.settle_payment(
-        params[:authorization_id],
-        final_amount: params[:final_amount]&.to_d
-      )
-      
-      if result[:success]
-        render json: {
-          settlement_id: result[:settlement_transaction_id],
-          status: 'settled',
-          gross_amount: result[:gross_amount],
-          fee_amount: result[:fee_amount],
-          net_amount: result[:net_amount]
-        }
-      else
-        render json: { error: result[:error] }, status: 422
-      end
-    end
-    
-    def void
-      service = Ledger::AuthorizationService.new
-      
-      result = service.void_authorization(
-        params[:authorization_id],
-        reason: params[:reason]
-      )
-      
-      if result[:success]
-        render json: { status: 'voided' }
-      else
-        render json: { error: result[:error] }, status: 422
-      end
-    end
-    
-    def index
-      # Show pending authorizations
-      authorizations = LedgerTransaction
-        .where(transaction_phase: 'authorization')
-        .where(settled_at: nil)
-        .where.not(status: 'reversed')
-        .includes(:ledger_entries)
-        .order(authorized_at: :desc)
-      
-      render json: authorizations.map { |auth|
-        {
-          id: auth.id,
-          authorization_code: auth.authorization_code,
-          amount: auth.gross_amount,
-          currency: auth.ledger_entries.first&.currency,
-          authorized_at: auth.authorized_at,
-          expires_at: auth.reservation&.expires_at,
-          status: auth.settled_at ? 'settled' : 'pending'
-        }
-      }
-    end
-  end
-end
+    END FUNCTION
+END CONTROLLER
 ```
 
 #### Step 4: Reporting and Reconciliation
 
-```ruby
-# app/services/settlement_reporting_service.rb
-class SettlementReportingService
-  # Report on authorizations pending settlement
-  def self.pending_settlements_report(start_date:, end_date:)
-    pending = LedgerTransaction
-      .where(transaction_phase: 'authorization')
-      .where(settled_at: nil)
-      .where.not(status: 'reversed')
-      .where(authorized_at: start_date.beginning_of_day..end_date.end_of_day)
-      .includes(:ledger_entries)
+```mermaid
+flowchart TD
+    Start[Generate Report] --> Query[Query Transactions]
+    Query --> Group[Group by Status]
+    Group --> Calc[Calculate Totals]
+    Calc --> Aging[Calculate Aging]
+    Aging --> Output[Return Report]
     
-    {
-      count: pending.count,
-      total_amount: pending.sum(:gross_amount),
-      by_currency: pending.group('ledger_entries.currency').sum(:gross_amount),
-      aging: {
-        '0-1_days': pending.where('authorized_at > ?', 1.day.ago).count,
-        '1-3_days': pending.where(authorized_at: 3.days.ago..1.day.ago).count,
-        '3-7_days': pending.where(authorized_at: 7.days.ago..3.days.ago).count,
-        '7+_days': pending.where('authorized_at < ?', 7.days.ago).count
-      }
-    }
-  end
-  
-  # Daily settlement reconciliation
-  def self.daily_settlement_reconciliation(date: Date.yesterday)
-    # Get all settlements for the date
-    settlements = LedgerTransaction
-      .where(transaction_phase: 'settlement')
-      .where(settled_at: date.beginning_of_day..date.end_of_day)
+    style Start fill:#6366f1
+    style Output fill:#10b981
+```
+
+```pseudocode
+SERVICE SettlementReportingService:
+    // Report on authorizations pending settlement
+    FUNCTION generate_pending_settlements_report(start_date, end_date):
+        pending = QUERY ledger_transactions
+            WHERE transaction_phase = 'authorization'
+            AND settled_at IS NULL
+            AND status != 'reversed'
+            AND authorized_at BETWEEN start_date AND end_date
+            JOIN ledger_entries ON ledger_transactions.id = ledger_entries.transaction_id
+        
+        RETURN {
+            count: COUNT pending,
+            total_amount: SUM pending.gross_amount,
+            by_currency: GROUP SUM pending.gross_amount BY ledger_entries.currency,
+            aging: {
+                '0-1_days': COUNT pending WHERE authorized_at > NOW() - 1 day,
+                '1-3_days': COUNT pending WHERE authorized_at BETWEEN NOW() - 3 days AND NOW() - 1 day,
+                '3-7_days': COUNT pending WHERE authorized_at BETWEEN NOW() - 7 days AND NOW() - 3 days,
+                '7+_days': COUNT pending WHERE authorized_at < NOW() - 7 days
+            }
+        }
+    END FUNCTION
     
-    # Group by batch
-    by_batch = settlements.group_by(&:settlement_batch_id).transform_values do |txns|
-      {
-        count: txns.count,
-        gross: txns.sum(:gross_amount),
-        fees: txns.sum(:fee_amount),
-        net: txns.sum(:net_amount)
-      }
-    end
+    // Daily settlement reconciliation
+    FUNCTION reconcile_daily_settlements(date):
+        // Get all settlements for the date
+        settlements = QUERY ledger_transactions
+            WHERE transaction_phase = 'settlement'
+            AND settled_at BETWEEN start of date AND end of date
+        
+        // Group by batch
+        by_batch = GROUP settlements BY settlement_batch_id
+        batch_summary = MAP by_batch TO {
+            batch_id: batch,
+            count: COUNT transactions,
+            gross: SUM gross_amount,
+            fees: SUM fee_amount,
+            net: SUM net_amount
+        }
+        
+        RETURN {
+            date: date,
+            total_settlements: COUNT settlements,
+            total_gross: SUM settlements.gross_amount,
+            total_fees: SUM settlements.fee_amount,
+            total_net: SUM settlements.net_amount,
+            by_batch: batch_summary,
+            unmatched_authorizations: CALL count_unmatched_authorizations(date)
+        }
+    END FUNCTION
     
-    # Calculate totals
-    {
-      date: date,
-      total_settlements: settlements.count,
-      total_gross: settlements.sum(:gross_amount),
-      total_fees: settlements.sum(:fee_amount),
-      total_net: settlements.sum(:net_amount),
-      by_batch: by_batch,
-      unmatched_authorizations: unmatched_authorizations_count(date)
-    }
-  end
-  
-  # Find authorizations that should have settled but didn't
-  def self.unmatched_authorizations_count(date)
-    LedgerTransaction
-      .where(transaction_phase: 'authorization')
-      .where(settled_at: nil)
-      .where('authorized_at < ?', date.end_of_day - 3.days) # Older than 3 days
-      .where.not(status: 'reversed')
-      .count
-  end
-  
-  # Fee analysis
-  def self.fee_analysis(start_date:, end_date:)
-    settlements = LedgerTransaction
-      .where(transaction_phase: 'settlement')
-      .where(settled_at: start_date.beginning_of_day..end_date.end_of_day)
+    // Find authorizations that should have settled but didn't
+    FUNCTION count_unmatched_authorizations(date):
+        RETURN QUERY COUNT ledger_transactions
+            WHERE transaction_phase = 'authorization'
+            AND settled_at IS NULL
+            AND authorized_at < date - 3 days
+            AND status != 'reversed'
+    END FUNCTION
     
-    total_gross = settlements.sum(:gross_amount)
-    total_fees = settlements.sum(:fee_amount)
-    
-    {
-      period: "#{start_date} to #{end_date}",
-      total_volume: total_gross,
-      total_fees: total_fees,
-      effective_rate: total_gross > 0 ? (total_fees / total_gross * 100).round(2) : 0,
-      average_transaction: settlements.count > 0 ? (total_gross / settlements.count).round(2) : 0,
-      by_processor: settlements.group(:metadata['processor']).sum(:fee_amount)
-    }
-  end
-end
+    // Fee analysis
+    FUNCTION analyze_fees(start_date, end_date):
+        settlements = QUERY ledger_transactions
+            WHERE transaction_phase = 'settlement'
+            AND settled_at BETWEEN start_date AND end_date
+        
+        total_gross = SUM settlements.gross_amount
+        total_fees = SUM settlements.fee_amount
+        
+        RETURN {
+            period: start_date + " to " + end_date,
+            total_volume: total_gross,
+            total_fees: total_fees,
+            effective_rate: IF total_gross > 0 THEN ROUND(total_fees / total_gross * 100, 2) ELSE 0,
+            average_transaction: IF COUNT settlements > 0 THEN ROUND(total_gross / COUNT settlements, 2) ELSE 0,
+            by_processor: GROUP SUM settlements.fee_amount BY metadata.processor
+        }
+    END FUNCTION
+END SERVICE
 ```
 
 #### Step 5: Schedule Settlement Processing
 
-```ruby
-# config/schedule.rb
-every 1.day, at: '4:00 am' do
-  rake 'settlements:process_daily_batch'
-end
+```pseudocode
+SCHEDULE DailySettlementBatchJob:
+    run_at: "04:00"
+    action: 
+        date = YESTERDAY
+        service = CREATE AuthorizationService()
+        CALL service.process_settlement_batch(date)
+        OUTPUT "Processed settlement batch for " + date
+END SCHEDULE
 
-every 1.day, at: '9:00 am' do
-  rake 'settlements:report_pending'
-end
+SCHEDULE PendingSettlementsReportJob:
+    run_at: "09:00"
+    action:
+        report = CALL SettlementReportingService.generate_pending_settlements_report(
+            start_date: NOW() - 7 days,
+            end_date: TODAY
+        )
+        
+        OUTPUT "Pending Settlements Report"
+        OUTPUT "Total Pending: " + report.count
+        OUTPUT "Total Amount: $" + report.total_amount
+        OUTPUT "Aging:"
+        FOR EACH bucket, count IN report.aging:
+            OUTPUT "  " + bucket + ": " + count
+        
+        // Alert if old pending exists
+        IF report.aging['7+_days'] > 0:
+            CALL alert_service.notify_old_pending_settlements(report.aging['7+_days'])
+END SCHEDULE
 
-# lib/tasks/settlements.rake
-namespace :settlements do
-  desc 'Process daily settlement batch'
-  task process_daily_batch: :environment do
-    date = Date.yesterday
-    
-    service = Ledger::AuthorizationService.new
-    service.process_settlement_batch(settlement_date: date)
-    
-    puts "Processed settlement batch for #{date}"
-  end
-  
-  desc 'Report on pending authorizations'
-  task report_pending: :environment do
-    report = SettlementReportingService.pending_settlements_report(
-      start_date: 7.days.ago.to_date,
-      end_date: Date.today
+// CLI Task: Process daily settlement batch
+TASK process_daily_settlement_batch:
+    date = YESTERDAY
+    service = CREATE AuthorizationService()
+    CALL service.process_settlement_batch(date)
+    OUTPUT "Processed settlement batch for " + date
+END TASK
+
+// CLI Task: Report on pending authorizations
+TASK report_pending_authorizations:
+    report = CALL SettlementReportingService.generate_pending_settlements_report(
+        start_date: NOW() - 7 days,
+        end_date: TODAY
     )
     
-    puts "Pending Settlements Report"
-    puts "=" * 50
-    puts "Total Pending: #{report[:count]}"
-    puts "Total Amount: $#{report[:total_amount]}"
-    puts "\nAging:"
-    report[:aging].each do |bucket, count|
-      puts "  #{bucket}: #{count}"
-    end
+    OUTPUT "Pending Settlements Report"
+    OUTPUT "=" * 50
+    OUTPUT "Total Pending: " + report.count
+    OUTPUT "Total Amount: $" + report.total_amount
+    OUTPUT "\nAging:"
+    FOR EACH bucket, count IN report.aging:
+        OUTPUT "  " + bucket + ": " + count
     
-    # Alert if old pending exists
-    if report[:aging]['7+_days'] > 0
-      AlertService.notify_old_pending_settlements(report[:aging]['7+_days'])
-    end
-  end
-  
-  desc 'Reconcile yesterday\'s settlements'
-  task reconcile: :environment do
-    reconciliation = SettlementReportingService.daily_settlement_reconciliation
+    IF report.aging['7+_days'] > 0:
+        CALL alert_service.notify_old_pending_settlements(report.aging['7+_days'])
+END TASK
+
+// CLI Task: Reconcile yesterday's settlements
+TASK reconcile_settlements:
+    reconciliation = CALL SettlementReportingService.reconcile_daily_settlements(YESTERDAY)
     
-    puts "Settlement Reconciliation for #{reconciliation[:date]}"
-    puts "=" * 50
-    puts "Settlements: #{reconciliation[:total_settlements]}"
-    puts "Gross: $#{reconciliation[:total_gross]}"
-    puts "Fees: $#{reconciliation[:total_fees]}"
-    puts "Net: $#{reconciliation[:total_net]}"
-    puts "\nUnmatched Authorizations: #{reconciliation[:unmatched_authorizations]}"
-  end
-end
+    OUTPUT "Settlement Reconciliation for " + reconciliation.date
+    OUTPUT "=" * 50
+    OUTPUT "Settlements: " + reconciliation.total_settlements
+    OUTPUT "Gross: $" + reconciliation.total_gross
+    OUTPUT "Fees: $" + reconciliation.total_fees
+    OUTPUT "Net: $" + reconciliation.total_net
+    OUTPUT "\nUnmatched Authorizations: " + reconciliation.unmatched_authorizations
+END TASK
 ```
 
 ### Key Takeaways
