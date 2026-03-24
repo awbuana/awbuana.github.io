@@ -67,11 +67,6 @@ git submodule update --init --recursive
 - Vary the emotional tone (confusion, frustration, excitement, anxiety)
 - Mix first-person observations with direct statements
 
-**Check existing posts before writing.** Search for similar phrases in `content/posts/` to ensure you're not repeating yourself:
-```bash
-grep -r "your opening phrase" content/posts/
-```
-
 **Prefer specific details over generic setups.** Instead of "I stared at the whiteboard," try:
 - "The database query timed out after 30 seconds..."
 - "Our CEO raised an eyebrow during the demo..."
