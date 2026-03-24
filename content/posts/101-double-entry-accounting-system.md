@@ -1,6 +1,6 @@
 ---
 title: "Double Entry Accounting System 101: A Developer's Guide"
-date: 2026-03-25
+date: 2026-03-24
 description: "Learn double-entry bookkeeping from a developer's perspective. Complete guide with mermaid diagrams covering ride-hailing and payment gateway use cases."
 tags:
   - fintech
