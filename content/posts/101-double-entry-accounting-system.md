@@ -118,6 +118,19 @@ flowchart TB
 
 **Why Driver Payable is a liability:** You owe the driver $20. Until you transfer it, it's debt on your books.
 
+**Journal Entry for Step 1:**
+
+| Account | Debit (+) | Credit (−) | Balance Impact |
+|---------|-----------|------------|----------------|
+| **Stripe Holding** (Asset) | $25.00 | | +$25.00 |
+| **Platform Revenue** (Equity) | | $5.00 | +$5.00 |
+| **Driver Payable** (Liability) | | $20.00 | +$20.00 |
+| **Total** | **$25.00** | **$25.00** | **✓ Balanced** |
+
+**Verification:** Assets ($25) = Liabilities ($20) + Equity ($5) ✓
+
+---
+
 ### Step 2: Stripe Settlement
 
 Three days later, Stripe transfers $24.22 to your bank (they kept $0.78 as processing fees):
@@ -141,6 +154,27 @@ flowchart TB
 
 Notice: The full $25 leaves Stripe Holding. Some becomes Cash, some becomes an Expense.
 
+**Journal Entry for Step 2:**
+
+| Account | Debit (+) | Credit (−) | Balance Impact |
+|---------|-----------|------------|----------------|
+| **Bank Cash** (Asset) | $24.22 | | +$24.22 |
+| **Stripe Fee Expense** (Equity) | $0.78 | | −$0.78 |
+| **Stripe Holding** (Asset) | | $25.00 | −$25.00 |
+| **Total** | **$25.00** | **$25.00** | **✓ Balanced** |
+
+**Running Balances After Step 2:**
+
+| Account | Before | After Step 2 |
+|---------|--------|--------------|
+| Stripe Holding | $25.00 | **$0.00** (cleared) |
+| Bank Cash | $0.00 | **$24.22** |
+| Stripe Fee Expense | $0.00 | **$0.78** |
+| Platform Revenue | $5.00 | **$5.00** (unchanged) |
+| Driver Payable | $20.00 | **$20.00** (unchanged) |
+
+---
+
 ### Step 3: Driver Payout
 
 The driver requests their $20, and you send it via bank transfer:
@@ -161,6 +195,33 @@ flowchart TB
 ```
 
 **The Driver Payable liability is now zero**—you don't owe them anything.
+
+**Journal Entry for Step 3:**
+
+| Account | Debit (+) | Credit (−) | Balance Impact |
+|---------|-----------|------------|----------------|
+| **Driver Payable** (Liability) | $20.00 | | −$20.00 (cleared) |
+| **Bank Cash** (Asset) | | $20.00 | −$20.00 |
+| **Total** | **$20.00** | **$20.00** | **✓ Balanced** |
+
+**Final Balances After All Steps:**
+
+| Account | Step 1 | Step 2 | Step 3 | Final |
+|---------|--------|--------|--------|-------|
+| **Stripe Holding** | $25.00 | $0.00 | $0.00 | **$0.00** |
+| **Bank Cash** | $0.00 | $24.22 | $4.22 | **$4.22** |
+| **Platform Revenue** | $5.00 | $5.00 | $5.00 | **$5.00** |
+| **Stripe Fee Expense** | $0.00 | $0.78 | $0.78 | **$0.78** |
+| **Driver Payable** | $20.00 | $20.00 | $0.00 | **$0.00** |
+| **Net Position** | **+$25.00** | **+$4.22** | **+$4.22** | **+$4.22** |
+
+**Balance Sheet Check:**
+- **Assets:** Bank Cash $4.22 = **$4.22**
+- **Liabilities:** Driver Payable $0.00 = **$0.00**
+- **Equity:** Revenue $5.00 − Expense $0.78 = **$4.22**
+- **Accounting Equation:** $4.22 = $0.00 + $4.22 ✓
+
+---
 
 ### Complete Transaction Flow
 
@@ -211,6 +272,28 @@ flowchart TB
 
 Notice we reduce Revenue (you didn't really earn it) and Driver Payable (you don't owe them anymore). If you already paid the driver, you'd create a Driver Receivable instead—they now owe you money back.
 
+**Journal Entry for Chargeback Reversal (Scenario: Already Settled, Not Yet Paid Driver):**
+
+| Account | Debit (+) | Credit (−) | Balance Impact |
+|---------|-----------|------------|----------------|
+| **Platform Revenue** (Equity) | $5.00 | | −$5.00 (reversed) |
+| **Driver Payable** (Liability) | $20.00 | | −$20.00 (cleared) |
+| **Stripe Holding** (Asset) | | $25.00 | −$25.00 (refund due) |
+| **Total** | **$25.00** | **$25.00** | **✓ Balanced** |
+
+**Net Effect of Reversal:**
+
+| Account | Before Reversal | After Reversal | Change |
+|---------|-----------------|------------------|--------|
+| Platform Revenue | $5.00 | **$0.00** | −$5.00 |
+| Driver Payable | $20.00 | **$0.00** | −$20.00 |
+| Stripe Holding | $0.00 | **−$25.00** | −$25.00 |
+| Bank Cash | $4.22 | **$4.22** | $0.00 |
+
+**Note:** Stripe Holding becomes negative $25 because you now owe Stripe a refund. When you actually send the refund, you'll debit Stripe Holding and credit Bank Cash.
+
+---
+
 ## Use Case 2: Payment Gateway
 
 Payment gateways have an extra layer: merchant accounts, reserves, and rolling reserves. Let's trace a $1,000 transaction with a 2.9% + $0.30 fee.
@@ -231,6 +314,12 @@ flowchart TB
 ```
 
 At this stage, you've verified the card has funds. No money has changed hands in your ledger yet.
+
+**Journal Entry for Step 1:**
+
+*No entry recorded* — Authorization alone doesn't change your books. The card hold exists in the payment processor's system, not in your ledger.
+
+---
 
 ### Step 2: Capture and Settlement
 
@@ -258,6 +347,26 @@ flowchart TB
 
 **Merchant Payable is $970.70**—what you'll actually transfer to the merchant.
 
+**Journal Entry for Step 2:**
+
+| Account | Debit (+) | Credit (−) | Balance Impact |
+|---------|-----------|------------|----------------|
+| **Gateway Holding** (Asset) | $1,000.00 | | +$1,000.00 |
+| **Fee Revenue** (Equity) | | $29.30 | +$29.30 |
+| **Merchant Payable** (Liability) | | $970.70 | +$970.70 |
+| **Total** | **$1,000.00** | **$1,000.00** | **✓ Balanced** |
+
+**Balances After Step 2:**
+
+| Account | Type | Balance |
+|---------|------|---------|
+| **Gateway Holding** | Asset | **+$1,000.00** |
+| **Fee Revenue** | Equity | **+$29.30** |
+| **Merchant Payable** | Liability | **+$970.70** |
+| **Net Position** | | **+$29.30** (your fee) |
+
+---
+
 ### Step 3: Rolling Reserve
 
 Payment gateways often hold a percentage (let's say 10%) for 90 days to cover potential chargebacks:
@@ -277,6 +386,25 @@ flowchart TB
 ```
 
 The $100 moves from "available" to "held." It's still your liability to the merchant, but now it's segregated.
+
+**Journal Entry for Step 3 (10% Reserve Hold):**
+
+| Account | Debit (+) | Credit (−) | Balance Impact |
+|---------|-----------|------------|----------------|
+| **Rolling Reserve** (Liability) | | $100.00 | +$100.00 (segregated) |
+| **Gateway Holding** (Asset) | $100.00 | | −$100.00 (reduced) |
+| **Total** | **$100.00** | **$100.00** | **✓ Balanced** |
+
+**This is an internal reclassification** — no money leaves the system. We're just moving $100 from "available" to "held" status:
+
+| Account | Before Reserve | After Reserve | Change |
+|---------|----------------|---------------|--------|
+| **Gateway Holding** | $1,000.00 | **$900.00** | −$100.00 |
+| **Rolling Reserve** | $0.00 | **$100.00** | +$100.00 |
+| **Merchant Payable** | $970.70 | **$970.70** | $0.00 |
+| **Available for Payout** | $970.70 | **$870.70** | −$100.00 |
+
+---
 
 ### Step 4: Payout with Reserve Release
 
@@ -300,6 +428,39 @@ flowchart TB
     style Cash fill:#10b981,stroke:#059669
     style Reserve fill:#f59e0b,stroke:#d97706
 ```
+
+**Journal Entry for Step 4 (Payout T+2 and Reserve Release T+90):**
+
+**Day 1 (T+2): Payout Available Funds**
+
+| Account | Debit (+) | Credit (−) | Balance Impact |
+|---------|-----------|------------|----------------|
+| **Merchant Payable** (Liability) | $870.70 | | −$870.70 |
+| **Bank Cash** (Asset) | | $870.70 | −$870.70 |
+| **Total** | **$870.70** | **$870.70** | **✓ Balanced** |
+
+**Day 90 (T+90): Release Reserve & Final Payout**
+
+| Account | Debit (+) | Credit (−) | Balance Impact |
+|---------|-----------|------------|----------------|
+| **Merchant Payable** (Liability) | $100.00 | | −$100.00 |
+| **Rolling Reserve** (Liability) | $100.00 | | −$100.00 (released) |
+| **Bank Cash** (Asset) | | $100.00 | −$100.00 |
+| **Total** | **$200.00** | **$200.00** | **✓ Balanced** |
+
+**Final Balances After Complete Payout:**
+
+| Account | Step 2 | Step 3 | After Payout | Final |
+|---------|--------|--------|--------------|-------|
+| **Gateway Holding** | $1,000.00 | $900.00 | $0.00 | **$0.00** |
+| **Rolling Reserve** | $0.00 | $100.00 | $0.00 | **$0.00** |
+| **Merchant Payable** | $970.70 | $970.70 | $0.00 | **$0.00** |
+| **Fee Revenue** | $29.30 | $29.30 | $29.30 | **$29.30** |
+| **Bank Cash** | $0.00 | $0.00 | −$970.70 | **−$970.70** |
+
+**Your Net Position:** Fee Revenue $29.30 (your earnings as payment gateway)
+
+---
 
 ### Complete Payment Gateway Flow
 
@@ -369,6 +530,22 @@ flowchart TB
 
 You refund the gross amount but reduce the merchant's payable by the net amount (reversing their portion of the fee).
 
+**Journal Entry for Partial Refund:**
+
+| Account | Debit (+) | Credit (−) | Calculation |
+|---------|-----------|------------|-------------|
+| **Merchant Payable** (Liability) | $194.14 | | $200 − $5.86 (fee reversal) |
+| **Fee Revenue** (Equity) | $5.86 | | 2.9% + $0.30 of $200 |
+| **Gateway Holding** (Asset) | | $200.00 | Full refund amount |
+| **Total** | **$200.00** | **$200.00** | **✓ Balanced** |
+
+**The Logic:**
+- Customer gets full $200 refund from Gateway Holding
+- Merchant loses only their net portion: $200 − $5.86 fee = $194.14
+- You (the gateway) reverse $5.86 of fee revenue because you're refunding the fee too
+
+---
+
 ### Chargeback After Payout
 
 If the customer disputes after you've already paid the merchant:
@@ -394,6 +571,37 @@ flowchart TB
 ```
 
 Now the merchant owes you money (Receivable), and you've recorded a loss for the fee you can't recover.
+
+**Journal Entry for Post-Payout Chargeback:**
+
+| Account | Debit (+) | Credit (−) | Explanation |
+|---------|-----------|------------|-------------|
+| **Merchant Receivable** (Asset) | $970.70 | | Merchant must repay us |
+| **Chargeback Loss** (Expense) | $29.30 | | Fee we can't recover |
+| **Gateway Holding** (Asset) | | $1,000.00 | Full refund to customer |
+| **Total** | **$1,000.00** | **$1,000.00** | **✓ Balanced** |
+
+**What This Means:**
+- **Merchant Receivable ($970.70):** The merchant already received their payout, but now owes it back. This is money they must repay you.
+- **Chargeback Loss ($29.30):** Your fee revenue from this transaction is now a loss. You've already paid the merchant their share, so you eat the fee.
+- **Gateway Holding (−$1,000):** You sent $1,000 back to the customer
+
+**Net Impact on Your Books:**
+
+| Account | Before Chargeback | After Chargeback | Change |
+|---------|-------------------|------------------|--------|
+| **Gateway Holding** | $0.00 | **−$1,000.00** | −$1,000 |
+| **Merchant Receivable** | $0.00 | **$970.70** | +$970.70 |
+| **Chargeback Loss** | $0.00 | **$29.30** | +$29.30 |
+| **Net Position** | | | **−$29.30** (your loss) |
+
+**Why it's structured this way:**
+- You must refund the customer the full $1,000
+- The merchant received $970.70 and spent it, so now they owe it back (Receivable)
+- Your $29.30 fee is now a loss because you paid it out but can't claw it back
+- This preserves the accounting: every dollar refunded has a source (Merchant owes $970.70, you absorb $29.30)
+
+---
 
 ## The Database Perspective
 
@@ -465,6 +673,175 @@ Step 2: Bank Cash +97, Stripe Fee Expense +3, Stripe Holding -100
 ```
 
 The Stripe Holding account (clearing) starts at zero, goes up when the charge succeeds, then goes back to zero when the funds settle. At any point, if you see a balance in that account, you know money is in transit.
+
+### How Clearing Account Journaling Works: A Complete Walkthrough
+
+Let's trace a $100 charge through your books using the **journal entry table** format. This is what your actual ledger looks like:
+
+#### Step 1: Customer Payment Authorized ($100)
+
+When Stripe confirms the charge, you record it in your books:
+
+| Date | Account | Debit | Credit | Description |
+|------|---------|-------|--------|-------------|
+| Day 1 | **Stripe Holding** (Asset) | $100.00 | | Customer charge authorized |
+| Day 1 | **Revenue** (Equity) | | $100.00 | Sales revenue from customer |
+
+**What's happening:**
+- **Stripe Holding** (debit +$100): Your asset increases. You now have a claim to $100 that Stripe owes you.
+- **Revenue** (credit +$100): You earned the revenue, which increases equity.
+- **Balance check:** Assets ($100) = Liabilities ($0) + Equity ($100) ✓
+
+```mermaid
+flowchart LR
+    subgraph "Day 1: After Charge"
+        A1[Stripe Holding<br/>$100]
+        R1[Revenue<br/>$100]
+    end
+    
+    Customer -->|Authorization| Stripe
+    Stripe -->|Claim| A1
+    
+    style A1 fill:#10b981,stroke:#059669
+    style R1 fill:#f59e0b,stroke:#d97706
+```
+
+At this point, **Stripe Holding has a $100 balance**. This tells you: "We have money coming, but it's not in our bank yet."
+
+---
+
+#### Step 2: Funds Settle to Your Bank ($97 net)
+
+Three days later, Stripe transfers the money but keeps $3 as processing fees:
+
+| Date | Account | Debit | Credit | Description |
+|------|---------|-------|--------|-------------|
+| Day 4 | **Bank Cash** (Asset) | $97.00 | | Funds received from Stripe |
+| Day 4 | **Stripe Fee Expense** (Expense) | $3.00 | | Processing fees charged |
+| Day 4 | **Stripe Holding** (Asset) | | $100.00 | Clearing account reduced |
+
+**What's happening:**
+- **Bank Cash** (debit +$97): Your actual bank account increases by the net amount.
+- **Stripe Fee Expense** (debit +$3): Expenses reduce equity, so this is recorded as a debit.
+- **Stripe Holding** (credit -$100): The clearing account goes back to zero because the money is no longer "in transit."
+
+**Balance verification:**
+- Total Debits: $97 + $3 = $100
+- Total Credits: $100
+- Net Change: $0 ✓
+
+```mermaid
+flowchart LR
+    subgraph "Day 4: After Settlement"
+        SH[Stripe Holding<br/>$0]
+        BC[Bank Cash<br/>$97]
+        SF[Stripe Fee<br/>$3]
+        R[Revenue<br/>$100]
+    end
+    
+    StripeSettlement -->|Transfer $97| BC
+    StripeSettlement -->|Fee $3| SF
+    SH -->|Cleared| StripeSettlement
+    
+    style SH fill:#ef4444,stroke:#dc2626
+    style BC fill:#10b981,stroke:#059669
+    style SF fill:#f59e0b,stroke:#d97706
+    style R fill:#3b82f6,stroke:#2563eb
+```
+
+---
+
+#### Account Balances Over Time
+
+Here's how each account's balance changes:
+
+| Account | Day 1 | Day 2-3 | Day 4 | Final |
+|---------|-------|---------|-------|-------|
+| Stripe Holding | **$100** | **$100** | **$0** | $0 |
+| Revenue | **$100** | **$100** | **$100** | $100 |
+| Stripe Fee Expense | $0 | $0 | **$3** | $3 |
+| Bank Cash | $0 | $0 | **$97** | $97 |
+| **Total Assets** | **$100** | **$100** | **$97** | **$97** |
+| **Total Equity** | **$100** | **$100** | **$97** | **$97** |
+
+**Why Stripe Holding went to zero:**
+- Day 1: Money is in Stripe's custody, we record it as "Stripe Holding"
+- Day 4: Money arrives in our bank, so we "clear" the holding account
+- The clearing account acts like a **temporary bridge** between systems
+
+---
+
+#### The Journal Entry Chain
+
+Think of it as a **chain of custody** for money:
+
+```mermaid
+sequenceDiagram
+    actor Customer
+    participant SH as Stripe Holding
+    participant Bank as Bank Cash
+    participant Rev as Revenue
+    participant Fee as Stripe Fee
+    
+    Note over Customer,Fee: Day 1: Charge Authorized
+    Customer->>SH: $100
+    SH->>Rev: $100 (Credit)
+    
+    Note over Customer,Fee: Day 4: Settlement
+    SH->>Bank: $97
+    SH->>Fee: $3
+    SH->>SH: -$100 (Cleared)
+    
+    Note over Customer,Fee: Final State
+    Bank-->>Fee: Total: $97 assets
+    Rev-->>Fee: Total: $97 equity ($100 rev - $3 fee)
+```
+
+---
+
+#### What If Settlement Never Comes?
+
+Here's why clearing accounts matter. If Stripe declines the transfer on Day 4:
+
+| Date | Account | Debit | Credit | Description |
+|------|---------|-------|--------|-------------|
+| Day 4 | **Revenue** (Reversal) | $100.00 | | Reverse unrecognized revenue |
+| Day 4 | **Stripe Holding** (Asset) | | $100.00 | Clear the holding account |
+
+**Result:**
+- Revenue goes back to $0 (we never actually earned it)
+- Stripe Holding goes to $0 (no money was received)
+- Bank Cash stays at $0
+- **Your books are still correct.**
+
+Without the clearing account, you would have recorded $100 in Revenue and $100 in Bank Cash on Day 1. When the transfer failed, your books would be wrong by $100.
+
+---
+
+### Clearing Account vs. Revenue Recognition
+
+**Key concept:** Revenue and cash settlement are separate events in double-entry bookkeeping.
+
+```mermaid
+flowchart TB
+    subgraph "Two-Step Process"
+        A[Charge Authorized<br/>Day 1] -->|Journal Entry| B[Stripe Holding +$100<br/>Revenue +$100]
+        B --> C[Settlement Complete<br/>Day 4] 
+        C -->|Journal Entry| D[Bank Cash +$97<br/>Stripe Fee $3<br/>Stripe Holding -$100]
+    end
+    
+    subgraph "Why This Matters"
+        E[Accurate Revenue Reporting] --> F[Know earnings before settlement]
+        G[Cash Flow Tracking] --> H[See money in transit]
+        I[Error Recovery] --> J[Can reverse if charge fails]
+    end
+    
+    D --> E
+    D --> G
+    D --> I
+```
+
+**Takeaway:** The clearing account lets you **recognize revenue when earned** (Day 1) while **tracking cash separately** (Day 4). This gives you accurate financial statements at any point in time.
 
 ### When You Need Clearing Accounts
 
